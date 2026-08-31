@@ -227,8 +227,15 @@ tune2fs -l "$DATA_DEV" 2>/dev/null | grep -E 'Last checked|Mount count|Maximum m
 echo
 echo "=== Tailscale ==="
 ts_problems_before="$problems"
-if ! systemctl is-active --quiet tailscaled; then
-  note "tailscaled is not active — remote access and tailnet DNS are unavailable."
+# Running LAN-only is a supported choice, so an absent Tailscale is reported as
+# a fact and NOT counted as a problem. Only a half-working one is a problem:
+# installed and enabled but not actually up is the state worth alerting on.
+if ! command -v tailscale >/dev/null && ! systemctl list-unit-files tailscaled.service >/dev/null 2>&1; then
+  echo "    not installed — this box is LAN-only. Not a fault."
+elif ! systemctl is-enabled --quiet tailscaled 2>/dev/null && ! systemctl is-active --quiet tailscaled; then
+  echo "    installed but not enabled — LAN-only by choice. Not a fault."
+elif ! systemctl is-active --quiet tailscaled; then
+  note "tailscaled is enabled but not active — remote access and tailnet DNS are unavailable."
 elif ! command -v tailscale >/dev/null; then
   note "tailscale CLI is missing even though tailscaled is active."
 elif ! command -v jq >/dev/null; then

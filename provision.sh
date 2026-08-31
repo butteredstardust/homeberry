@@ -3,23 +3,80 @@
 # provision.sh — turn a fresh 64-bit Raspberry Pi OS LITE image (Bookworm 12
 #                or Trixie 13) into the host for pi-stack.
 #
-# RUN ON THE NEW PI:
-#     sudo bash /opt/pi-stack/provision.sh [phase]
+# RUN ON THE NEW PI, IN TWO STAGES WITH A REBOOT BETWEEN THEM:
 #
-# Phases (default: all) — each is idempotent and re-runnable alone:
-#     base drive perms docker native firewall samba dns stack backup
-#     maintenance quarterly watchdog heal beszelagent diskguard fsck
+#     sudo bash /opt/pi-stack/provision.sh host      # stage 1
+#     sudo reboot
+#     sudo bash /opt/pi-stack/provision.sh services  # stage 2
+#
+# ⚠ THE REBOOT IS NOT OPTIONAL, and this is why there is no `all`:
+#
+#   * Stage 1 appends cgroup_enable=memory to the kernel command line. Until
+#     the machine reboots, every `mem_limit:` in docker-compose.yml is
+#     discarded SILENTLY — containers created before the reboot come up with
+#     no limit and `docker inspect` reports Memory=0. Recreating them later
+#     is the only fix, so it is cheaper to reboot first.
+#   * Stage 1 loads AppArmor, which likewise only applies to containers
+#     created after it is active.
+#   * Stage 1 adds `pi` to the `docker` group. Group membership is granted at
+#     login, so the SSH session that ran stage 1 does NOT have it. Without the
+#     reboot (or at least a reconnect) the first un-sudoed `docker compose`
+#     fails with a permission error on the socket.
+#
+# Individual phases are idempotent and can be re-run alone at any time:
+#
+#   stage `host`      base drive perms docker native firewall tailscale samba dns
+#   stage `services`  stack adlists backup maintenance quarterly watchdog heal
+#                     beszelagent diskguard fsck dnscutover
 #
 set -euo pipefail
 
 STACK="${STACK:-/opt/pi-stack}"
-PHASE="${1:-all}"
+PHASE="${1:-}"
 
 [[ $EUID -eq 0 ]] || { echo "Run with sudo." >&2; exit 1; }
 
 say()  { printf '\n\033[1;32m>>> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m !! %s\033[0m\n' "$*"; }
-run()  { [[ "$PHASE" == "all" || "$PHASE" == "$1" ]]; }
+
+# Order here is execution order within each stage; it matches the order of the
+# blocks below and is what makes `dns` (free port 53) precede the container
+# start, and `dnscutover` (point the host at Pi-hole) follow it.
+HOST_PHASES=(base drive perms docker native firewall tailscale samba dns)
+SERVICE_PHASES=(stack adlists backup maintenance quarterly watchdog heal
+                beszelagent diskguard fsck dnscutover)
+
+in_list() { local n="$1"; shift; local p; for p in "$@"; do [[ "$p" == "$n" ]] && return 0; done; return 1; }
+
+run() {
+  case "$PHASE" in
+    host)     in_list "$1" "${HOST_PHASES[@]}" ;;
+    services) in_list "$1" "${SERVICE_PHASES[@]}" ;;
+    *)        [[ "$PHASE" == "$1" ]] ;;
+  esac
+}
+
+if [[ -z "$PHASE" ]] || ! { [[ "$PHASE" == host || "$PHASE" == services ]] \
+     || in_list "$PHASE" "${HOST_PHASES[@]}" || in_list "$PHASE" "${SERVICE_PHASES[@]}"; }; then
+  if [[ "$PHASE" == "all" ]]; then
+    warn "There is no 'all' stage, deliberately — see the comment at the top of this file."
+    warn "Provisioning has to stop for a reboot, or memory limits and AppArmor"
+    warn "do not apply to the containers this script would otherwise have started."
+  elif [[ -n "$PHASE" ]]; then
+    warn "Unknown phase: $PHASE"
+  fi
+  cat >&2 <<USAGE
+
+Usage: sudo bash provision.sh <stage|phase>
+
+  Stage 1:  host       then REBOOT
+  Stage 2:  services
+
+  host phases:      ${HOST_PHASES[*]}
+  services phases:  ${SERVICE_PHASES[*]}
+USAGE
+  exit 1
+fi
 
 # On a fresh image, unattended-upgrades fires shortly after first boot and holds
 # the dpkg lock for several minutes. Without this, every apt-get below dies with
@@ -320,6 +377,99 @@ if run firewall; then
   fi
 fi
 
+# ============================================================= TAILSCALE =====
+# Runs BEFORE samba on purpose: the samba phase publishes SMB over Tailscale
+# Serve, and that call is a no-op unless tailscaled is already up.
+#
+# This is the only remote-access mechanism here. Nothing is port-forwarded, so
+# without Tailscale the box is strictly LAN-only — which is a legitimate way to
+# run it. Hence: the packages and host settings are always installed, but
+# joining a tailnet is skipped (loudly) if no auth key is configured.
+if run tailscale; then
+  say "Tailscale"
+
+  if ! command -v tailscale >/dev/null; then
+    install -d -m 0755 /usr/share/keyrings
+    _os_id="$(. /etc/os-release && echo "$ID")"
+    _os_codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+    curl -fsSL "https://pkgs.tailscale.com/stable/${_os_id}/${_os_codename}.noarmor.gpg" \
+      -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+    curl -fsSL "https://pkgs.tailscale.com/stable/${_os_id}/${_os_codename}.tailscale-keyring.list" \
+      -o /etc/apt/sources.list.d/tailscale.list
+    wait_for_apt; apt-get update
+    apt_install tailscale
+  else
+    say "  tailscale already installed ($(tailscale version | head -1))"
+  fi
+
+  # Forwarding, for the subnet router. Docker sets ip_forward at runtime as a
+  # side effect, which is not the same as it being set before tailscaled starts
+  # — relying on that is how subnet routing works until the first reboot and
+  # then quietly stops.
+  cat > /etc/sysctl.d/99-tailscale.conf <<'EOF'
+# Required for Tailscale subnet routing. Set here rather than relying on
+# Docker's incidental runtime change, which is not ordered before tailscaled.
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+EOF
+  sysctl -p /etc/sysctl.d/99-tailscale.conf >/dev/null
+
+  # ethtool settings are runtime-only and do NOT survive a reboot, so they need
+  # a unit rather than a one-off command. Without these the kernel cannot
+  # coalesce forwarded UDP, and WireGuard throughput through this box is capped
+  # well below link speed.
+  _uplink="$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')"
+  _uplink="${_uplink:-eth0}"
+  cat > /etc/systemd/system/ethtool-udp-gro.service <<EOF
+[Unit]
+Description=UDP GRO forwarding tuning for Tailscale on ${_uplink}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Non-fatal: some NICs do not support these offloads, and a failure here should
+# cost throughput, not prevent the machine from booting.
+ExecStart=-/usr/sbin/ethtool -K ${_uplink} rx-udp-gro-forwarding on rx-gro-list off
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now ethtool-udp-gro.service || \
+    warn "  ethtool tuning failed — throughput only; not fatal"
+
+  systemctl enable --now tailscaled
+
+  # --accept-dns=false is load-bearing: this host resolves via 127.0.0.1
+  # (Pi-hole). Letting tailscaled rewrite resolv.conf to 100.100.100.100 points
+  # the host at the tailnet resolver, which points back here — a loop.
+  _ts_args=( --accept-dns=false --hostname="$LOCAL_HOSTNAME" )
+  [[ -n "${LAN_SUBNET:-}" ]] && _ts_args+=( --advertise-routes="$LAN_SUBNET" )
+
+  if tailscale status >/dev/null 2>&1; then
+    say "  already joined a tailnet; re-applying settings"
+    tailscale set "${_ts_args[@]}" 2>/dev/null || tailscale up "${_ts_args[@]}"
+  elif [[ -n "${TAILSCALE_AUTHKEY:-}" && "$TAILSCALE_AUTHKEY" != changeme ]]; then
+    tailscale up --authkey="$TAILSCALE_AUTHKEY" "${_ts_args[@]}"
+    say "  joined tailnet as $(tailscale ip -4 2>/dev/null || echo '?')"
+  else
+    warn "  TAILSCALE_AUTHKEY is not set in $STACK/.env — not joining a tailnet."
+    warn "  The box stays LAN-only, which is fine. To join later, run:"
+    warn "      sudo tailscale up ${_ts_args[*]}"
+    warn "  ...and open the URL it prints. Then re-run: sudo bash provision.sh samba"
+  fi
+
+  if tailscale status >/dev/null 2>&1; then
+    warn "  Two things Tailscale will NOT do for you:"
+    warn "    1. Approve the advertised subnet route ${LAN_SUBNET:-<LAN_SUBNET>} in the admin"
+    warn "       console. Until you do, tailnet peers cannot reach the LAN."
+    warn "    2. Apply the ACL policy. Paste config/tailscale-policy.hujson.example"
+    warn "       (with your own values) at login.tailscale.com/admin/acls."
+  fi
+fi
+
 # ================================================================= SAMBA =====
 if run samba; then
   say "Samba share for $DATA_ROOT (replaces the empty FTP dir)"
@@ -408,11 +558,11 @@ if run dns; then
     warn "Resolve this before starting the stack."
   fi
 
-  # Point the host itself at its own Pi-hole once it is up.
-  if command -v nmcli >/dev/null; then
-    nmcli con mod "Wired connection 1" ipv4.ignore-auto-dns yes ipv4.dns "127.0.0.1" 2>/dev/null || \
-      warn "Could not set host DNS via nmcli — do it manually if needed."
-  fi
+  # NOTE: pointing the HOST at its own Pi-hole is deliberately NOT done here.
+  # At this point in stage 1 the container does not exist, so setting the
+  # resolver to 127.0.0.1 would leave this machine with no DNS for the rest of
+  # provisioning — no apt, no image pulls, no Caddy build. That is the
+  # `dnscutover` phase, at the very end of stage 2.
 fi
 
 # ================================================================= STACK =====
@@ -550,6 +700,64 @@ if run stack; then
   # Arcane's password is not provisionable: it enforces 12+ chars with upper,
   # lower, digit and symbol, and the CLI reset needs both a TTY and
   # ALLOW_CLI_PASSWORD_RESET=true. Set it by hand after first boot; see README.
+fi
+
+# =============================================================== ADLISTS =====
+# Pi-hole ships with ONE adlist (StevenBlack). Everything documented in
+# OPERATIONS.md §7.6 lived in gravity.db, which is appdata and therefore not in
+# this repository — so without this phase a fresh install silently has a
+# fraction of the documented blocking, including none of the DoH blocking that
+# §7.5 depends on.
+if run adlists; then
+  say "Importing Pi-hole adlists"
+  _adlists="$STACK/config/pihole-adlists.txt"
+  _gravity=/etc/pihole/gravity.db
+
+  if [[ ! -r "$_adlists" ]]; then
+    warn "$_adlists not found — skipping"
+  elif ! docker exec pihole test -f "$_gravity" 2>/dev/null; then
+    warn "pihole container is not running, or gravity.db does not exist yet."
+    warn "  Start the stack first, then: sudo bash provision.sh adlists"
+  else
+    _added=0 _seen=0
+    while IFS= read -r _line || [[ -n "$_line" ]]; do
+      [[ -z "${_line// }" || "$_line" == \#* ]] && continue
+      _url="${_line%%[$'\t' ]*}"
+      _comment="${_line#"$_url"}"
+      _comment="${_comment#"${_comment%%[![:space:]]*}"}"
+      [[ "$_url" == https://* || "$_url" == http://* ]] || {
+        warn "  skipping non-URL line: $_line"; continue; }
+      _seen=$((_seen + 1))
+
+      # INSERT OR IGNORE, keyed on the UNIQUE address column: re-running never
+      # resurrects a list you disabled by hand, and never overwrites the comment
+      # explaining why. Single-quotes are doubled to keep a quote in a URL or
+      # comment from terminating the literal.
+      _q_url="${_url//\'/\'\'}"; _q_comment="${_comment//\'/\'\'}"
+      if docker exec pihole pihole-FTL sqlite3 "$_gravity" \
+           "INSERT OR IGNORE INTO adlist (address, enabled, comment)
+            VALUES ('$_q_url', 1, '$_q_comment');" >/dev/null 2>&1; then
+        _added=$((_added + 1))
+      else
+        warn "  failed to import: $_url"
+      fi
+    done < "$_adlists"
+
+    say "  $_added/$_seen adlist entries present in gravity.db"
+    docker exec pihole pihole-FTL sqlite3 "$_gravity" \
+      'SELECT id, enabled, address FROM adlist ORDER BY id;' 2>/dev/null || true
+
+    # Compile them. This downloads every list and rebuilds the gravity table;
+    # on a Pi 4 with the full set it takes a few minutes and is bandwidth-heavy.
+    # Until it runs, the rows above have no effect on what actually resolves.
+    say "  Running gravity (this downloads ~35 MB and takes several minutes)"
+    if docker exec pihole pihole -g; then
+      say "  gravity rebuilt"
+    else
+      warn "  gravity rebuild FAILED. The adlists are recorded but not compiled."
+      warn "  Retry with: docker exec pihole pihole -g"
+    fi
+  fi
 fi
 
 # ================================================================ BACKUP =====
@@ -836,8 +1044,25 @@ fi
 if run beszelagent; then
   say "Installing native Beszel Agent with SMART access"
   apt_install smartmontools
-  : "${BESZEL_KEY:?set BESZEL_KEY in $STACK/.env}"
-  : "${BESZEL_TOKEN:?set BESZEL_TOKEN in $STACK/.env}"
+
+  # Chicken-and-egg: the hub ISSUES these, so they cannot exist before the hub
+  # has started and someone has claimed ownership and added this system. Hard
+  # failure here would make `services` unrunnable on a fresh install, so skip
+  # loudly instead — everything else in the stage still gets set up.
+  if [[ -z "${BESZEL_KEY:-}" || -z "${BESZEL_TOKEN:-}" \
+        || "${BESZEL_KEY}" == changeme || "${BESZEL_TOKEN}" == changeme ]]; then
+    warn "BESZEL_KEY / BESZEL_TOKEN are not set in $STACK/.env — skipping the agent."
+    warn "  These are issued BY the hub, so they cannot exist yet on a fresh install:"
+    warn "    1. Open http://${LAN_IP}:8086 and create the owner account NOW."
+    warn "       ⚠ Beszel makes the FIRST VISITOR the owner. Do not leave this open."
+    warn "    2. Add System -> copy the key and token into $STACK/.env"
+    warn "    3. sudo bash provision.sh beszelagent"
+    warn "  Metrics and SMART history are unavailable until then. Nothing else breaks."
+    BESZEL_SKIPPED=1
+  fi
+fi
+
+if run beszelagent && [[ -z "${BESZEL_SKIPPED:-}" ]]; then
 
   if ! id -u beszel >/dev/null 2>&1; then
     useradd --system --home-dir /var/lib/beszel-agent --shell /usr/sbin/nologin beszel
@@ -1014,7 +1239,89 @@ EOF
   systemctl enable --now pi-fsck-datadrive.timer
 fi
 
+# ============================================================ DNS CUTOVER =====
+# LAST, and only after Pi-hole is proven to answer. Pointing the host at
+# 127.0.0.1 before that leaves it with no resolver at all, which breaks the rest
+# of provisioning in a way that looks like a network fault rather than a
+# configuration mistake.
+if run dnscutover; then
+  say "Pointing this host at its own Pi-hole"
+
+  if ! docker exec pihole dig +short +time=2 +tries=1 @127.0.0.1 pi.hole >/dev/null 2>&1; then
+    warn "Pi-hole is not answering queries — NOT changing this host's resolver."
+    warn "  Fix Pi-hole first, then: sudo bash provision.sh dnscutover"
+  else
+    if command -v nmcli >/dev/null; then
+      _con="$(nmcli -t -g NAME connection show --active 2>/dev/null | head -1)"
+      if [[ -n "$_con" ]]; then
+        nmcli con mod "$_con" ipv4.ignore-auto-dns yes ipv4.dns "127.0.0.1" 2>/dev/null \
+          && nmcli con up "$_con" >/dev/null 2>&1 \
+          && say "  host resolver set to 127.0.0.1 on '$_con'" \
+          || warn "  nmcli could not set the resolver — do it by hand."
+      else
+        warn "  No active NetworkManager connection found — set the resolver by hand."
+      fi
+    else
+      warn "  nmcli not present. Set nameserver 127.0.0.1 by whatever manages"
+      warn "  /etc/resolv.conf on this image, or the host keeps using the router."
+    fi
+
+    if getent hosts pi.hole >/dev/null 2>&1 || dig +short +time=2 pi.hole >/dev/null 2>&1; then
+      say "  host resolution still works"
+    else
+      warn "  This host can no longer resolve names. Revert with:"
+      warn "    sudo nmcli con mod '<connection>' ipv4.ignore-auto-dns no ipv4.dns ''"
+    fi
+  fi
+
+  cat <<'EOF'
+
+  ------------------------------------------------------------------
+  THE ROUTER IS THE LAST STEP, AND IT IS MANUAL.
+
+  Only once you have confirmed Pi-hole answers from ANOTHER device:
+
+    1. Set the router's DHCP-advertised DNS to this Pi's address.
+    2. REMOVE any secondary DNS entry. A second resolver silently
+       breaks every Pi-hole-only name: `dig` looks fine because it
+       queries only the first, while macOS getaddrinfo races both
+       and takes the other one's NXDOMAIN.
+
+  Doing this earlier is what makes provisioning fail in confusing
+  ways, which is why nothing above touches the router.
+  ------------------------------------------------------------------
+EOF
+fi
+
 # =============================================================== SUMMARY =====
+if [[ "$PHASE" == host ]]; then
+  say "Stage 1 (host) complete"
+  cat <<EOF
+
+================================================================
+  REBOOT NOW. Then run stage 2.
+
+      sudo reboot
+      # reconnect, then:
+      sudo bash $STACK/provision.sh services
+
+  Why the reboot is mandatory, not tidiness:
+
+    * cgroup_enable=memory was appended to the kernel command line.
+      Until the machine reboots, every mem_limit: in
+      docker-compose.yml is silently discarded. Containers started
+      before the reboot come up unlimited and have to be recreated.
+    * AppArmor only confines containers created after it is active.
+    * The 'pi' user was added to the 'docker' group. Group
+      membership is granted at LOGIN, so this session does not have
+      it — the first un-sudoed 'docker compose' would fail.
+
+  Do NOT change the router's DNS yet. Stage 2 tells you when.
+================================================================
+EOF
+  exit 0
+fi
+
 say "Provisioning complete"
 printf '\n%-24s %s\n' "NATIVE SERVICE" "STATE"
 for s in ssh docker avahi-daemon smbd nmbd; do

@@ -41,9 +41,10 @@ build manual and stops once the stack is up.
 | Arcane | `ghcr.io/getarcaneapp/manager` | `3552` | Docker web UI |
 | Samba | native | `139`, `445` | SMB share of the data drive |
 
-Plus, from `provision.sh`: nftables firewall, nightly + weekly backups with an
-off-box pull, a container watchdog, disk/SMART/thermal guard, scheduled `e2fsck`,
-and a quarterly update job with automatic rollback.
+Plus, from `provision.sh`: nftables firewall, Tailscale (subnet router, optional),
+nine Pi-hole adlists, nightly + weekly backups with an off-box pull, a container
+watchdog, disk/SMART/thermal guard, scheduled `e2fsck`, and a quarterly update
+job with automatic rollback.
 
 **All images are pinned by digest.** Caddy is the one exception — it is built
 here, because the official image ships no DNS provider modules, so its pin is the
@@ -70,16 +71,21 @@ here, because the official image ships no DNS provider modules, so its pin is th
   fails** without it. See §7 for why DuckDNS specifically.
 - A plex.tv account, if you want Plex.
 
-**Router changes — three, all mandatory**
+**Router changes — three, all mandatory, but NOT all at the same time**
 
-1. **DHCP reservation** pinning the Pi to a fixed address. The address is not
-   configured on the Pi itself, so a reimaged Pi returns on the same IP.
-2. **DNS handed to clients = the Pi's address.** This is what makes Pi-hole the
-   LAN resolver.
-3. **Remove any secondary DNS entry.** A second resolver silently breaks every
-   Pi-hole-only name — `dig` still looks fine, because it queries only the
-   first, while macOS `getaddrinfo` races both and takes the other one's
-   NXDOMAIN. See [docs/OPERATIONS.md](docs/OPERATIONS.md) §7.3.
+⚠ Only the first is done up front. Doing 2 and 3 early is the single most
+common way to make this build fail confusingly: it takes DNS away from the
+machine that is still installing packages and pulling images.
+
+1. **Before you start:** a **DHCP reservation** pinning the Pi to a fixed
+   address. The address is not configured on the Pi itself, so a reimaged Pi
+   returns on the same IP.
+2. **After stage 2, once Pi-hole is verified:** set the **DNS handed to clients
+   = the Pi's address.** This is what makes Pi-hole the LAN resolver.
+3. **At the same time:** **remove any secondary DNS entry.** A second resolver
+   silently breaks every Pi-hole-only name — `dig` still looks fine, because it
+   queries only the first, while macOS `getaddrinfo` races both and takes the
+   other one's NXDOMAIN. See [docs/OPERATIONS.md](docs/OPERATIONS.md) §7.3.
 
 ⚠ Consequence of 2 and 3: **Pi-hole becomes a single point of failure for
 household DNS, with no fallback.** That is deliberate — a fallback that resolves
@@ -117,6 +123,7 @@ cp .env.example .env && chmod 600 .env
 | `DATA_DRIVE_UUID` | *blank* | Leave blank — `provision.sh` detects it, asks you to confirm, and writes it back |
 | `DATA_ROOT` | `/mnt/rpidata` | Bind-mounted at the same path inside containers. Fix it before first run or not at all |
 | `MEDIA_SUBFOLDERS` | `music,torrent-complete,…` | Folders `fix-permissions.sh` takes ownership of |
+| `TAILSCALE_AUTHKEY` | *blank* | **Optional.** Blank = stay LAN-only. Tailscale and its host settings are installed either way |
 | `DOCKER_GID` | `985` | `provision.sh` derives the real one with `getent group docker` and rewrites this |
 
 **Secrets** — all `changeme` in `.env.example`, all required:
@@ -185,18 +192,52 @@ cd /opt/pi-stack
 cp .env.example .env && chmod 600 .env
 vim .env                               # see §3
 
-# 5. Host setup — all phases, idempotent, ~15 min
-sudo bash provision.sh
+# 5. STAGE 1 — host setup. ~15 min.
+sudo bash provision.sh host
 
-# 6. Bring up the stack. First run BUILDS Caddy: ~6 min on a Pi 4.
-docker compose up -d --build
+# 6. Reboot. NOT optional — see below.
+sudo reboot
+
+# 7. STAGE 2 — reconnect, then start the stack and install the timers.
+#    First run BUILDS Caddy: ~6 min on a Pi 4. Adlists add several more.
+cd /opt/pi-stack && sudo bash provision.sh services
 ```
+
+⚠ **The reboot between stages is mandatory.** Three things set up in stage 1
+only take effect at boot, and all three affect containers *created before* it:
+
+- `cgroup_enable=memory` is appended to the kernel command line. Until reboot,
+  every `mem_limit:` is **silently discarded** — `docker inspect` reports
+  `Memory=0` and the container runs unlimited.
+- AppArmor only confines containers created after it is active.
+- `pi` is added to the `docker` group, and group membership is granted at
+  **login** — the session that ran stage 1 does not have it, so the first
+  un-sudoed `docker compose` fails on the socket.
+
+There is deliberately no `all` stage. It would produce a stack that looks
+correct and has no memory limits.
+
+**Do not change the router's DNS until stage 2 tells you to.** Pointing clients
+at an unprovisioned Pi takes DNS away from the machine that is mid-install —
+`apt`, image pulls and the Caddy build all need it. The `dnscutover` phase runs
+last, verifies Pi-hole actually answers before touching the host resolver, and
+then prints the router instructions.
 
 The `drive` phase stops and asks you to confirm the disk before it writes
 `/etc/fstab`. It will not proceed on a placeholder UUID.
 
-**One thing `provision.sh` cannot do**, because the file does not exist until
-Transmission has started once — disable its UPnP begging:
+### After stage 2 — four things nothing can do for you
+
+1. **Claim Beszel immediately** at `http://<LAN_IP>:8086`. The **first visitor
+   becomes the owner**. Then *Add System*, put the key and token in `.env`, and
+   run `sudo bash provision.sh beszelagent` — the credentials are issued by the
+   hub, so they cannot exist before this.
+2. **Change the first-run credentials**: Homebridge (`admin`/`admin`), Arcane
+   (`arcane`/`arcane-admin`). Record them in `.env`.
+3. **Approve the subnet route and paste the ACL policy** in the Tailscale admin
+   console, if you joined a tailnet. Neither is settable from the host.
+4. **Disable Transmission's UPnP begging.** The file does not exist until it has
+   started once:
 
 ```bash
 docker compose stop transmission
@@ -207,11 +248,12 @@ docker compose start transmission
 The default is `true`, which makes Transmission ask the router for a mapping it
 can never get through CGNAT.
 
-**Phases**, each re-runnable alone (`sudo bash provision.sh dns`):
+**Phases**, each idempotent and re-runnable alone (`sudo bash provision.sh dns`):
 
 ```
-base drive perms docker native firewall samba dns stack
-backup maintenance quarterly watchdog heal beszelagent diskguard fsck
+host      base drive perms docker native firewall tailscale samba dns
+services  stack adlists backup maintenance quarterly watchdog heal
+          beszelagent diskguard fsck dnscutover
 ```
 
 **Off-box backups** — install once on a machine that is usually on:
@@ -443,6 +485,7 @@ reasoning and how to undo it.
 │  ├─ samba-tailscale-ordering.conf
 │  ├─ ssh-hardening.conf               → sshd_config.d/
 │  ├─ filebrowser-config.yaml
+│  ├─ pihole-adlists.txt               declarative adlists -> gravity.db
 │  ├─ starbase80-config.json.tmpl      dashboard links; rendered by provision.sh
 │  └─ tailscale-policy.hujson.example  → PASTED into the Tailscale admin
 │                                        console, not deployed. Drifts silently

@@ -292,7 +292,9 @@ Docker is ordered `After=mnt-rpidata.mount`
 **only** — deliberately not `RequiresMountsFor=`, which would stop Docker
 entirely if the disk died and take LAN DNS with it.
 
-Drive replaced? New UUID goes in `provision.sh` (`DRIVE_UUID`) and `/etc/fstab`.
+Drive replaced? The new UUID goes in `.env` (`DATA_DRIVE_UUID`) and `/etc/fstab`
+— blank it in `.env` and re-run `sudo bash provision.sh drive` to have it
+re-detected from `DATA_DEV` and written back.
 
 ### 2.6 Bad update
 
@@ -851,6 +853,13 @@ in (`sqlite3 db < file.sql`) rather than nesting quotes inside `ssh`/`docker exe
 
 ⚠ `sqlite3 -column /tmp/q.sql` **hangs**. Passing a `.sql` file as the first
 argument opens it *as the database* and blocks on stdin. Always `< file.sql`.
+
+**The repository's declarative source is `config/pihole-adlists.txt`**, applied
+by `sudo bash provision.sh adlists`. The import is additive and idempotent — an
+address already in `gravity.db` keeps its current enabled state and comment, so
+a list you disabled by hand stays disabled across re-runs, and nothing is ever
+deleted. Add a list there rather than in the web UI if you want it to survive a
+rebuild.
 
 Current gravity: **1,172,601 unique domains** (1,301,928 rows) across 9 lists.
 

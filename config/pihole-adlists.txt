@@ -1,0 +1,40 @@
+# Pi-hole adlists, applied by `provision.sh adlists`.
+#
+# ⚠ gravity.db is authoritative for adlists. /etc/pihole/adlists.list is a v5
+# artefact and is IGNORED by v6 — editing it does nothing. This file is the
+# repository's declarative source, imported into gravity.db and then compiled by
+# `pihole -g`.
+#
+# Format:  <url><TAB or spaces><comment>
+# Blank lines and lines starting with # are ignored.
+#
+# Importing is additive and idempotent: an address already present keeps its
+# current enabled/disabled state and comment, so a list you disabled by hand
+# stays disabled across re-runs. Nothing here is ever deleted — see the
+# "disabled, not deleted" note in docs/OPERATIONS.md §7.6.
+#
+# ⚠ These overlap heavily by design; that is not waste. Overlap is what makes
+# any single list's outage or bad update non-fatal. Before adding more, read
+# §7.6: the marginal unique-domain count of a tenth list is usually near zero,
+# and every list is a source of false positives you will have to debug.
+
+# ---- bulk ads and tracking --------------------------------------------------
+https://www.github.developerdan.com/hosts/lists/ads-and-tracking-extended.txt	developerdan ads-and-tracking-extended — bulk ads/tracking
+https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt	HaGeZi Pro — curated ads/tracking
+https://raw.githubusercontent.com/r-a-y/mobile-hosts/master/AdguardDNS.txt	AdGuard DNS (r-a-y mirror) — mobile ads
+https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts	StevenBlack — baseline
+https://small.oisd.nl/	oisd small — low-false-positive baseline
+
+# ---- malware, phishing, scam ------------------------------------------------
+https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.medium.txt	HaGeZi TIF Medium — malware/phishing/scam
+
+# ---- encrypted-DNS bypass ---------------------------------------------------
+# The long tail behind §7.5. This blocks the IP-literal and hostname rendezvous
+# points for public DoH servers, which is what stops a client bootstrapping DoH
+# before it can ask Pi-hole anything. Disable this one first if a device starts
+# behaving strangely.
+https://raw.githubusercontent.com/dibdot/DoH-IP-blocklists/master/doh-domains_overall.txt	dibdot DoH-IP-blocklists — DoH endpoints
+
+# ---- niche ------------------------------------------------------------------
+https://raw.githubusercontent.com/hoshsadiq/adblock-nocoin-list/master/hosts.txt	nocoin — cryptojacking
+https://raw.githubusercontent.com/r-a-y/mobile-hosts/master/EasyPrivacySpecific.txt	EasyPrivacySpecific — marginal, ~100 unique domains
