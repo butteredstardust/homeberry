@@ -15,6 +15,11 @@
 
 </div>
 
+<p align="center">
+  <img src="docs/images/homeberry-dashboard.png" alt="Homeberry Starbase 80 dashboard showing media, files, home automation, administration, and monitoring services" width="1200">
+</p>
+<p align="center"><em>The live Starbase 80 homepage — one clean entry point for the household stack.</em></p>
+
 ---
 
 This is a working setup, generalised. Every site-specific value is driven from
@@ -626,7 +631,9 @@ reasoning and how to undo it.
 │  ├─ pull-backups.sh           off-box backup pull (runs on the workstation)
 │  └─ com.example.pi-backup-pull.plist.tmpl
 ├─ docs/
-│  └─ OPERATIONS.md             the runbook
+│  ├─ OPERATIONS.md             the runbook
+│  └─ images/
+│     └─ homeberry-dashboard.png  README screenshot
 └─ appdata/                     ALL MUTABLE STATE          (gitignored)
    ├─ pihole/etc/               config, gravity DB, adlists
    ├─ plex/                     library DB, watch state, metadata
