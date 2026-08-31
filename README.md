@@ -39,53 +39,21 @@ build manual and stops once the stack is up.
 
 Twelve containers plus native Samba, grouped the way the dashboard groups them.
 
-<div align="center">
-
-**Media**
-
-[![Plex](https://img.shields.io/badge/Plex-E5A00D?style=for-the-badge&logo=plex&logoColor=white)](https://www.plex.tv)
-[![Transmission](https://img.shields.io/badge/Transmission-D70008?style=for-the-badge&logo=transmission&logoColor=white)](https://transmissionbt.com)
-
-**Files**
-
-[![FileBrowser](https://img.shields.io/badge/FileBrowser%20Quantum-455A64?style=for-the-badge)](https://github.com/gtsteffaniak/filebrowser)
-[![Samba](https://img.shields.io/badge/Samba-4E5A65?style=for-the-badge)](https://www.samba.org)
-[![MicroBin](https://img.shields.io/badge/MicroBin-6E4B9E?style=for-the-badge)](https://microbin.eu)
-
-**Home**
-
-[![Homebridge](https://img.shields.io/badge/Homebridge-491F59?style=for-the-badge&logo=homebridge&logoColor=white)](https://homebridge.io)
-
-**Admin**
-
-[![Pi-hole](https://img.shields.io/badge/Pi--hole-96060C?style=for-the-badge&logo=pihole&logoColor=white)](https://pi-hole.net)
-[![Caddy](https://img.shields.io/badge/Caddy-1F88C0?style=for-the-badge&logo=caddy&logoColor=white)](https://caddyserver.com)
-[![Arcane](https://img.shields.io/badge/Arcane-0F766E?style=for-the-badge)](https://github.com/getarcaneapp/arcane)
-[![starbase-80](https://img.shields.io/badge/starbase--80-5B6478?style=for-the-badge)](https://github.com/notclickable-jordan/starbase-80)
-
-**Monitoring**
-
-[![Beszel](https://img.shields.io/badge/Beszel-2F855A?style=for-the-badge)](https://beszel.dev)
-[![Dozzle](https://img.shields.io/badge/Dozzle-3A7BD5?style=for-the-badge)](https://dozzle.dev)
-[![Diun](https://img.shields.io/badge/Diun-795548?style=for-the-badge)](https://crazymax.dev/diun/)
-
-</div>
-
-| Service | Image | Port | Purpose |
-|---|---|---|---|
-| Pi-hole | `pihole/pihole` | `53`, `8080` | LAN DNS + ad blocking. Host networking (owns `:53`) |
-| Caddy | **built here** (`caddy/`) | `80`, `443` | TLS for every UI below |
-| Plex | `lscr.io/linuxserver/plex` | `32400` | Media. Host networking. Deliberately **not** proxied |
-| Transmission | `lscr.io/linuxserver/transmission` | `9091` | Torrents |
-| Homebridge | `homebridge/homebridge` | `8581` | HomeKit bridge. Host networking (mDNS) |
-| FileBrowser Quantum | `gtstef/filebrowser:stable` | `8082` | Web file manager for the data drive |
-| MicroBin | `danielszabo99/microbin` | `8083` | Pastebin / small-file drop |
-| starbase-80 | `jordanroher/starbase-80` | `8084` | Dashboard linking to all of the above |
-| Dozzle | `amir20/dozzle` | `8085` | Live container logs |
-| Beszel | `henrygd/beszel` | `8086` | Metrics, SMART history |
-| Diun | `crazymax/diun` | — | Image-drift notifications |
-| Arcane | `ghcr.io/getarcaneapp/manager` | `3552` | Docker web UI |
-| Samba | native | `139`, `445` | SMB share of the data drive |
+| | Service | Image | Port | Purpose |
+|---|---|---|---|---|
+| **Media** | [![Plex](https://img.shields.io/badge/Plex-E5A00D?style=flat-square&logo=plex&logoColor=white)](https://www.plex.tv) | `lscr.io/linuxserver/plex` | `32400` | Films, TV, music. Host networking. Deliberately **not** proxied |
+| | [![Transmission](https://img.shields.io/badge/Transmission-D70008?style=flat-square&logo=transmission&logoColor=white)](https://transmissionbt.com) | `lscr.io/linuxserver/transmission` | `9091` | Torrents |
+| **Files** | [![FileBrowser](https://img.shields.io/badge/FileBrowser-455A64?style=flat-square)](https://github.com/gtsteffaniak/filebrowser) | `gtstef/filebrowser:stable` | `8082` | Web file manager for the data drive |
+| | [![Samba](https://img.shields.io/badge/Samba-4E5A65?style=flat-square)](https://www.samba.org) | native, not a container | `139`, `445` | SMB share of the data drive |
+| | [![MicroBin](https://img.shields.io/badge/MicroBin-6E4B9E?style=flat-square)](https://microbin.eu) | `danielszabo99/microbin` | `8083` | Paste text and small files between machines |
+| **Home** | [![Homebridge](https://img.shields.io/badge/Homebridge-491F59?style=flat-square&logo=homebridge&logoColor=white)](https://homebridge.io) | `homebridge/homebridge` | `8581` | HomeKit bridge. Host networking (mDNS) |
+| **Admin** | [![Pi-hole](https://img.shields.io/badge/Pi--hole-96060C?style=flat-square&logo=pihole&logoColor=white)](https://pi-hole.net) | `pihole/pihole` | `53`, `8080` | LAN DNS + ad blocking. Host networking (owns `:53`) |
+| | [![Caddy](https://img.shields.io/badge/Caddy-1F88C0?style=flat-square&logo=caddy&logoColor=white)](https://caddyserver.com) | **built here** (`caddy/`) | `80`, `443` | Wildcard TLS for every UI in this table |
+| | [![Arcane](https://img.shields.io/badge/Arcane-0F766E?style=flat-square)](https://github.com/getarcaneapp/arcane) | `ghcr.io/getarcaneapp/manager` | `3552` | Docker web UI. **Root-equivalent** — treat as such |
+| | [![starbase-80](https://img.shields.io/badge/starbase--80-5B6478?style=flat-square)](https://github.com/notclickable-jordan/starbase-80) | `jordanroher/starbase-80` | `8084` | Dashboard linking to everything above |
+| **Monitoring** | [![Beszel](https://img.shields.io/badge/Beszel-2F855A?style=flat-square)](https://beszel.dev) | `henrygd/beszel` | `8086` | CPU, memory, disk, SMART history |
+| | [![Dozzle](https://img.shields.io/badge/Dozzle-3A7BD5?style=flat-square)](https://dozzle.dev) | `amir20/dozzle` | `8085` | Live container logs |
+| | [![Diun](https://img.shields.io/badge/Diun-795548?style=flat-square)](https://crazymax.dev/diun/) | `crazymax/diun` | — | Notifies when an image goes stale |
 
 Plus, from `provision.sh`: nftables firewall, Tailscale (subnet router, optional),
 nine Pi-hole adlists, nightly + weekly backups with an off-box pull, a container
