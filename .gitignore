@@ -17,3 +17,6 @@ mac/com.example.pi-backup-pull.plist
 # Rollback copies written by quarterly-update.sh
 *.prev
 *.prev.*
+
+# Logs
+*.log

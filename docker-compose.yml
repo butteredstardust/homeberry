@@ -152,8 +152,16 @@ services:
       start_period: 5m
 
   # ---------------------------------------------------------- Transmission --
-  # Bridged: it needs no discovery, just its ports. 51413 must be forwarded on
-  # the router for decent peer connectivity (it was already, via the old setup).
+  # Bridged: it needs no discovery, just its ports.
+  #
+  # 51413 is the BitTorrent peer port. Under CGNAT it cannot be forwarded, so
+  # this box runs outbound-only: connectable peers still work, you simply are
+  # not connectable yourself. That is the assumed deployment here.
+  #
+  # ⚠ 51413 is the ONE port it could ever make sense to forward, and only on a
+  # connection with a real public address. It is not a management interface.
+  # Forwarding it does not weaken the rule in README §7.3, which is about 9091,
+  # 3552, 8082, 8083, 8085, 8086, 80 and 443 — none of those, ever.
   transmission:
     <<: *common
     image: lscr.io/linuxserver/transmission:latest@sha256:7356451f32395838628b241f33bcd7130df9302777fc23f80cbc7ca8b4997c02

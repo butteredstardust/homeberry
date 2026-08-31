@@ -36,8 +36,6 @@
 # codes that are expected to be non-zero.
 set -uo pipefail
 
-DEV="$DATA_DEV"
-MNT="$DATA_ROOT"
 STACK="${STACK:-/opt/pi-stack}"
 
 # --- site configuration ------------------------------------------------------
@@ -49,9 +47,39 @@ env_get() {
   sed -nE "s/^[[:space:]]*$1=[\"']?([^\"'#]*[^\"' #])[\"']?[[:space:]]*(#.*)?$/\1/p" \
     "$STACK/.env" | tail -1
 }
-DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-$DATA_ROOT}"
+DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
 DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-/dev/sda1}"
 DATA_DISK="${DATA_DEV%%[0-9]*}"
+DATA_DRIVE_UUID="$(env_get DATA_DRIVE_UUID)"
+
+MNT="$DATA_ROOT"
+# Resolve the device from the MOUNT, not from DATA_DEV. /dev/sdX is assigned in
+# USB enumeration order: plug in a second disk, or reboot with one attached, and
+# yesterday's /dev/sda1 is today's /dev/sdb1. This script runs `e2fsck -fy`
+# unattended, so pointing it at the wrong device by name is not a recoverable
+# mistake — it is the SD card getting "repaired".
+DEV="$(readlink -f "$(findmnt -rn -o SOURCE --target "$MNT" 2>/dev/null)" 2>/dev/null || true)"
+if [[ -z "$DEV" || ! -b "$DEV" ]]; then
+  echo "$(date -Is) REFUSING: nothing mounted at $MNT — cannot identify the target device" >&2
+  exit 1
+fi
+
+# Cross-check against the UUID in .env. The mount could itself be wrong (a stale
+# fstab entry, a disk swapped while powered off); the UUID travels with the
+# filesystem, so it is the only identifier worth trusting here.
+ACTUAL_UUID="$(blkid -s UUID -o value "$DEV" 2>/dev/null || true)"
+if [[ -n "$DATA_DRIVE_UUID" && "$ACTUAL_UUID" != "$DATA_DRIVE_UUID" ]]; then
+  echo "$(date -Is) REFUSING: $MNT is backed by $DEV (UUID $ACTUAL_UUID)," >&2
+  echo "  but .env says DATA_DRIVE_UUID=$DATA_DRIVE_UUID. Not touching it." >&2
+  exit 1
+fi
+if [[ -z "$DATA_DRIVE_UUID" ]]; then
+  echo "$(date -Is) REFUSING: DATA_DRIVE_UUID is unset in $STACK/.env." >&2
+  echo "  A repairing fsck will not run against a device it cannot verify." >&2
+  exit 1
+fi
+DATA_DISK="$(lsblk -no PKNAME "$DEV" 2>/dev/null | head -1)"
+DATA_DISK="${DATA_DISK:+/dev/$DATA_DISK}"
 # -----------------------------------------------------------------------------
 LOG="/var/log/pi-fsck.log"
 SERVICES=(plex transmission)   # pihole and homebridge do not touch this mount,

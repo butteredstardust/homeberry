@@ -435,6 +435,38 @@ if run stack; then
   mkdir -p "$STACK"/appdata/{pihole/etc,plex,transmission,homebridge,filebrowser,arcane,microbin}
   mkdir -p "$STACK"/appdata/starbase80/icons
   mkdir -p "$STACK"/appdata/caddy/{data,config}
+  mkdir -p "$STACK"/appdata/dozzle
+
+  # Dozzle has DOZZLE_AUTH_PROVIDER=simple, which means it authenticates against
+  # appdata/dozzle/users.yml and REFUSES TO START without it. Nothing else
+  # creates that file, so a fresh install has to generate it here or the logs UI
+  # never comes up. The file holds a bcrypt hash, not the password.
+  #
+  # Only generated when absent: regenerating on every provision run would silently
+  # revert a password changed later, and this phase is meant to be re-runnable.
+  _dozzle_users="$STACK/appdata/dozzle/users.yml"
+  if [[ ! -s "$_dozzle_users" ]]; then
+    if [[ -z "${DOZZLE_PASSWORD:-}" || "$DOZZLE_PASSWORD" == changeme ]]; then
+      warn "DOZZLE_PASSWORD is unset or still 'changeme' in $STACK/.env."
+      warn "  Dozzle will not start until appdata/dozzle/users.yml exists."
+      warn "  Set a real password and re-run: sudo bash provision.sh stack"
+    else
+      _dozzle_img="$(sed -nE 's|^[[:space:]]*image:[[:space:]]*(amir20/dozzle[^[:space:]]*).*|\1|p' \
+                     "$STACK/docker-compose.yml" | head -1)"
+      if docker run --rm --entrypoint /dozzle "$_dozzle_img" generate \
+           --name "Admin" --email "admin@example.invalid" \
+           --password "$DOZZLE_PASSWORD" admin > "${_dozzle_users}.new" 2>/dev/null \
+         && [[ -s "${_dozzle_users}.new" ]]; then
+        mv "${_dozzle_users}.new" "$_dozzle_users"
+        chmod 600 "$_dozzle_users"
+        say "Generated Dozzle users.yml (user: admin)"
+      else
+        rm -f "${_dozzle_users}.new"
+        warn "Could not generate Dozzle users.yml — Dozzle will fail to start."
+        warn "  Generate it by hand; the command is in .env next to DOZZLE_PASSWORD."
+      fi
+    fi
+  fi
 
   # starbase80's icons are deliberately LOCAL rather than CDN-fetched, so the
   # dashboard renders with no internet and makes no outbound requests per load.

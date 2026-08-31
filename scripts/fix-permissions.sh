@@ -49,21 +49,36 @@ env_get() {
   sed -nE "s/^[[:space:]]*$1=[\"']?([^\"'#]*[^\"' #])[\"']?[[:space:]]*(#.*)?$/\1/p" \
     "$STACK/.env" | tail -1
 }
-DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-$DATA_ROOT}"
+DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
 DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-/dev/sda1}"
 DATA_DISK="${DATA_DEV%%[0-9]*}"
 # -----------------------------------------------------------------------------
 
 OWNER="1000:1000"
-TARGETS=(
-  $DATA_ROOT/torrent-complete
-  $DATA_ROOT/torrent-inprogress
-  $DATA_ROOT/music
-  $DATA_ROOT/ftp
-)
 
 [[ $EUID -eq 0 ]] || { echo "Run with sudo." >&2; exit 1; }
-mountpoint -q $DATA_ROOT || { echo "$DATA_ROOT is not mounted — refusing to run." >&2; exit 1; }
+mountpoint -q "$DATA_ROOT" || { echo "$DATA_ROOT is not mounted — refusing to run." >&2; exit 1; }
+
+# Driven by MEDIA_SUBFOLDERS in .env, not a hardcoded list, so adding a share is
+# an .env edit rather than a code edit. Created if missing: this script is what
+# makes the folder layout exist on a fresh drive.
+IFS=',' read -r -a _subfolders <<< "$(env_get MEDIA_SUBFOLDERS)"
+[[ ${#_subfolders[@]} -gt 0 && -n "${_subfolders[0]}" ]] \
+  || _subfolders=(music torrent-complete torrent-inprogress ftp)
+
+TARGETS=()
+for _name in "${_subfolders[@]}"; do
+  _name="${_name#"${_name%%[![:space:]]*}"}"   # trim leading space
+  _name="${_name%"${_name##*[![:space:]]}"}"   # trim trailing space
+  [[ -n "$_name" ]] || continue
+  # Reject anything that could escape $DATA_ROOT. This runs as root and chowns
+  # recursively, so a stray `../` in .env would be a very bad afternoon.
+  case "$_name" in
+    */*|.|..|/*) echo "Refusing invalid MEDIA_SUBFOLDERS entry: '$_name'" >&2; exit 1 ;;
+  esac
+  mkdir -p -- "$DATA_ROOT/$_name"
+  TARGETS+=("$DATA_ROOT/$_name")
+done
 
 say() { printf '\n>>> %s\n' "$*"; }
 

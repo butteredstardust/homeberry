@@ -224,7 +224,7 @@ fix; read the logs.
 ### 2.3 Restore appdata
 
 Main recovery path. Snapshots in `/mnt/rpidata/backup/appdata/`, mirrored to
-`~/Dev/playground/pi-backups/` on the Mac. Tarball root is `appdata/`.
+`~/pi-backups/` on the workstation (set in `mac/pull-backups.sh`). Tarball root is `appdata/`.
 
 ```bash
 cd /opt/pi-stack
@@ -252,7 +252,7 @@ ownership, and opens every staged SQLite database. Run it on demand with
 `sudo systemctl start pi-restore-test.service`.
 
 Pi unreachable? Same tarballs on the Mac:
-`scp ~/Dev/playground/pi-backups/appdata-core-*.tar.gz pi:/tmp/`
+`scp ~/pi-backups/appdata-core-*.tar.gz pi:/tmp/`
 
 ### 2.4 SD card died — full rebuild
 
@@ -443,7 +443,7 @@ sudo tail -f /var/log/pi-fsck.log
 
 It stops Plex, Transmission and Samba, unmounts, runs `e2fsck -fp`, escalates to
 `-fy` only on exit code 4, remounts and restarts everything via a trap. Pi-hole
-and Homebridge stay up — **no DNS outage**. A full check takes **~40 s**: 687 GB
+and Homebridge stay up — **no DNS outage**. A full check takes tens of seconds on a ~700 GB spinning disk:
 but only ~13,500 files, and `metadata_csum` lets e2fsck skip never-used
 inode-table blocks. `18.8% non-contiguous` is torrent fragmentation, not damage.
 
@@ -522,10 +522,10 @@ sudo systemctl stop fw-deadman.timer  # only once you are sure
 ```
 
 **The input drop counter is expected to climb — that is not an attack.** The ISP
-router queries this Pi's DNS from a CGNAT-range address (`100.71.x.x`, which
-rotates). Measured 2026-08-25: **462,000 such queries in `pihole-FTL.db`, 100% of
+router queries this Pi's DNS from a CGNAT-range address (a `100.64.0.0/10` address, which
+rotates). On the setup this came from: **the overwhelming majority of queries in `pihole-FTL.db` arrived this way, 100% of
 them reverse-DNS and `_dns-sd._udp` lookups for `<LAN_SUBNET>`, zero real
-domains.** All 13 LAN clients resolve against the Pi directly, so nothing
+domains.** Every LAN client resolves against the Pi directly, so nothing
 forwards real DNS through the router and dropping this breaks nothing — it also
 stops roughly 230k junk queries a day from bloating the FTL database on the SD
 card. The forward counter should stay at zero.
@@ -573,7 +573,7 @@ and deleted 2026-08-25.
   back.
 - **The thumbnail cache is a 256 MB tmpfs** at `/home/filebrowser/tmp`. A RAM
   disk on purpose: the SD benchmarks at ~19 MB/s (the app warns at every start),
-  thumbnails for 514 GB of media are pure flash wear, and anything under
+  thumbnails for a large media library are pure flash wear, and anything under
   `appdata/` would land in every nightly backup. The cache has **no eviction** —
   `cacheDirCleanup` only wipes at start and shutdown — so the size cap is the
   only bound. Ignore the "less than the 20 GB minimum recommended" warning. When
@@ -1510,7 +1510,7 @@ still privileged: Docker-socket membership is effectively host-root access.
 `SMART_DEVICES=/dev/sda:sat` handles the USB-SATA bridge explicitly. The bridge
 returns smartctl status bit 2 because one ATA status opcode is unsupported, but
 Beszel 0.18.8 parses the valid attribute payload anyway. Verified in the hub DB:
-model `WDC WD7500BPKT-22PK4T0`, state `PASSED`, temperature and 17 attributes.
+model string, state `PASSED`, temperature and 17 attributes.
 
 ```bash
 sudo journalctl -u beszel-agent -n 50 | grep -E "Detected disk|SMART|WebSocket"

@@ -160,7 +160,7 @@ rollback() {
 
 # ============================================================== 1. BACKUP =====
 say "Full backup before touching anything"
-"$STACK/backup-appdata.sh" full
+"$STACK/scripts/backup-appdata.sh" full
 
 # ================================================================= 2. OS =====
 say "OS packages"
@@ -316,7 +316,7 @@ if [[ "$BESZEL_AGENT_TARGET" != "$BESZEL_AGENT_INSTALLED" ]]; then
   # Mark the transaction before invoking the installer. If it replaces the
   # binary and then fails, rollback must still restore the saved predecessor.
   BESZEL_AGENT_CHANGED=1
-  if ! "$STACK/install-beszel-agent.sh" "$BESZEL_AGENT_TARGET"; then
+  if ! "$STACK/scripts/install-beszel-agent.sh" "$BESZEL_AGENT_TARGET"; then
     warn "Beszel Agent install failed"
     rollback
     exit 1

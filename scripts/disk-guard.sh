@@ -31,8 +31,8 @@ env_get() {
   sed -nE "s/^[[:space:]]*$1=[\"']?([^\"'#]*[^\"' #])[\"']?[[:space:]]*(#.*)?$/\1/p" \
     "$STACK/.env" | tail -1
 }
-DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-$DATA_ROOT}"
-DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-$DATA_DEV}"
+DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
+DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-/dev/sda1}"
 DATA_DISK="${DATA_DEV%%[0-9]*}"
 # -----------------------------------------------------------------------------
 
@@ -172,11 +172,13 @@ echo "=== TLS certificate ==="
 # but Caddy is still serving the old certificate.
 CERT_WARN_DAYS=21     # comfortably inside Caddy's ~30-day renewal window, so
                       # this only fires once renewal has genuinely failed
-CADDY_DOMAIN="$(sed -nE 's/^[[:space:]]*CADDY_DOMAIN:[[:space:]]*([^[:space:]]+).*/\1/p' \
-                /opt/pi-stack/docker-compose.yml 2>/dev/null | head -1)"
+# From .env, NOT from docker-compose.yml. The compose file holds the literal
+# string `${CADDY_DOMAIN:?set CADDY_DOMAIN in .env}` — scraping it yields that
+# expression, not a domain, and the check then silently tests a nonsense name.
+CADDY_DOMAIN="$(env_get CADDY_DOMAIN)"
 
 if [[ -z "$CADDY_DOMAIN" ]]; then
-  echo "no CADDY_DOMAIN in docker-compose.yml — skipping"
+  echo "no CADDY_DOMAIN in $STACK/.env — skipping"
 elif ! command -v openssl >/dev/null; then
   echo "openssl not installed — skipping"
 else

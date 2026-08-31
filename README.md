@@ -129,7 +129,8 @@ cp .env.example .env && chmod 600 .env
 | `FILEBROWSER_PASSWORD` | **re-applied at every start**, so this file always wins over the UI |
 | `TRANSMISSION_PASSWORD` | consumed by the linuxserver image's init. **Blank it and RPC auth silently turns off** |
 | `MICROBIN_PASSWORD` | **not optional** — the default is the published `admin`/`m1cr0b1n` |
-| `ARCANE_PASSWORD` | **12+ chars, upper + lower + digit + symbol.** Arcane rejects anything weaker outright |
+| `ARCANE_PASSWORD` | **Nothing reads this** — Arcane owns its account DB. Fresh installs start as `arcane`/`arcane-admin` and prompt on first login; record what you chose here. 12+ chars, upper + lower + digit + symbol, or Arcane rejects it |
+| `DOZZLE_PASSWORD` | `provision.sh` turns this into `appdata/dozzle/users.yml` (a bcrypt hash). **Dozzle will not start without that file.** Changing this key later does nothing on its own — regenerate the file |
 | `ARCANE_ENCRYPTION_KEY` | `openssl rand -hex 32`. Never rotate to fix a login — it decrypts stored registry credentials |
 | `ARCANE_JWT_SECRET` | `openssl rand -hex 32` |
 | `DUCKDNS_TOKEN` | from duckdns.org. Can edit DNS for your subdomain and nothing else |
@@ -164,13 +165,20 @@ console**, not deployed by anything here. Replace its placeholders by hand. See
 #    Advanced options: set hostname, user `pi`, and your SSH public key.
 #    Verify after boot:  dpkg --print-architecture   -> arm64
 
-# 2. Format the data drive (skip if reusing an existing ext4 disk)
-lsblk                                  # identify the right device FIRST
-sudo mkfs.ext4 -L RPIDATA /dev/sda1
+# 2. Format the data drive (skip if reusing an existing ext4 disk).
+#    ⚠ mkfs is irreversible. /dev/sdX is assigned in USB enumeration order, so
+#    it is NOT a stable name — check MODEL and SERIAL, not just size.
+lsblk -o NAME,PATH,SIZE,MODEL,SERIAL,FSTYPE,LABEL,MOUNTPOINTS
 
-# 3. Copy the repo to the Pi, from your workstation
+DATA_DEVICE=/dev/sdX1                  # set only after reading the above
+findmnt --source "$DATA_DEVICE" && { echo "REFUSING: device is mounted"; false; }
+sudo mkfs.ext4 -L RPIDATA "$DATA_DEVICE"
+
+# 3. Copy the repo to the Pi, from your workstation.
+#    rsync, not `scp -r ./*` — that glob silently drops dotfiles, so
+#    .env.example never arrives and step 4 fails on a missing file.
 ssh pi@<PI_IP> 'sudo mkdir -p /opt/pi-stack && sudo chown pi:pi /opt/pi-stack'
-scp -r ./* pi@<PI_IP>:/opt/pi-stack/
+rsync -a --exclude='.git/' ./ pi@<PI_IP>:/opt/pi-stack/
 
 # 4. Configuration and secrets — on the Pi
 cd /opt/pi-stack
@@ -250,8 +258,11 @@ docker exec pihole dig +short @127.0.0.1 doubleclick.net     # -> 0.0.0.0
 echo | openssl s_client -connect 127.0.0.1:443 \
   -servername home.<YOUR_DOMAIN> 2>/dev/null \
   | openssl x509 -noout -issuer -subject -dates
-#    issuer must say Let's Encrypt. "Caddy Local Authority" means ACME failed
-#    and it fell back silently.
+#    The issuer must say Let's Encrypt and the dates must be current. Caddy does
+#    not quietly substitute its internal CA for a public name — if issuance
+#    fails you get a failed handshake or no certificate, not a working-looking
+#    one. "Caddy Local Authority" here means the name did not qualify as public
+#    (check CADDY_DOMAIN) rather than that ACME silently degraded.
 
 # 5. end-to-end through the proxy
 curl -sf -o /dev/null -w '%{http_code}\n' https://home.<YOUR_DOMAIN>/
@@ -304,6 +315,15 @@ wrong for any other threat model:
   tokens in stack traces. A session there is close to reading `.env`.
 - **Beszel's hub makes the first visitor the owner** until an admin account
   exists. Complete its first-run before anything else can reach it.
+- **The `pi` account and every member of the host `docker` group are
+  root-equivalent.** `provision.sh` adds both `pi` and the native `beszel` agent
+  to that group, and docker-group access is enough to start a privileged
+  container with the host filesystem mounted. Protect the SSH key accordingly,
+  and treat a compromise of the Beszel agent as a host compromise.
+- **Several services set their own credentials on first run and are wide open
+  until you do.** Homebridge starts at `admin`/`admin`, Arcane at
+  `arcane`/`arcane-admin`, and Beszel makes **the first visitor the owner**.
+  Complete all three before any other device on the LAN can reach the box.
 - **A shared password across services is a simplification, not a recommendation.**
   It is defensible only while the box stays LAN-only and holds nothing you would
   miss. Use distinct passwords if either stops being true.
