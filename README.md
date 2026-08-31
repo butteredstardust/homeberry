@@ -1,9 +1,21 @@
+<div align="center">
+
 # homeberry
 
-A self-hosted household stack for a Raspberry Pi 4: LAN DNS with ad blocking,
-media, file access, and a reverse proxy that gives every web UI a **real Let's
-Encrypt certificate** — on a box that is behind CGNAT and has no inbound
-connectivity at all.
+**A self-hosted household stack for a Raspberry Pi 4.**
+**LAN DNS with ad blocking, media, file access, and a real Let's Encrypt certificate on every UI — from behind CGNAT, with no inbound connectivity at all.**
+
+[![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
+[![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi%204-A22846?style=for-the-badge&logo=raspberrypi&logoColor=white)](https://www.raspberrypi.com/products/raspberry-pi-4-model-b/)
+[![Debian](https://img.shields.io/badge/Raspberry%20Pi%20OS-arm64-A81D33?style=for-the-badge&logo=debian&logoColor=white)](https://www.raspberrypi.com/software/operating-systems/)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-12%20services-2496ED?style=for-the-badge&logo=docker&logoColor=white)](docker-compose.yml)
+[![Caddy](https://img.shields.io/badge/Caddy-DNS--01-1F88C0?style=for-the-badge&logo=caddy&logoColor=white)](https://caddyserver.com)
+[![Let's Encrypt](https://img.shields.io/badge/TLS-wildcard-003A70?style=for-the-badge&logo=letsencrypt&logoColor=white)](https://letsencrypt.org)
+[![Tailscale](https://img.shields.io/badge/Tailscale-optional-242424?style=for-the-badge&logo=tailscale&logoColor=white)](https://tailscale.com)
+
+</div>
+
+---
 
 This is a working setup, generalised. Every site-specific value is driven from
 `.env`; nothing is hardcoded to the machine it came from. The gotchas throughout
@@ -24,6 +36,40 @@ build manual and stops once the stack is up.
 ---
 
 ## 1. What you get
+
+Twelve containers plus native Samba, grouped the way the dashboard groups them.
+
+<div align="center">
+
+**Media**
+
+[![Plex](https://img.shields.io/badge/Plex-E5A00D?style=for-the-badge&logo=plex&logoColor=white)](https://www.plex.tv)
+[![Transmission](https://img.shields.io/badge/Transmission-D70008?style=for-the-badge&logo=transmission&logoColor=white)](https://transmissionbt.com)
+
+**Files**
+
+[![FileBrowser](https://img.shields.io/badge/FileBrowser%20Quantum-455A64?style=for-the-badge)](https://github.com/gtsteffaniak/filebrowser)
+[![Samba](https://img.shields.io/badge/Samba-4E5A65?style=for-the-badge)](https://www.samba.org)
+[![MicroBin](https://img.shields.io/badge/MicroBin-6E4B9E?style=for-the-badge)](https://microbin.eu)
+
+**Home**
+
+[![Homebridge](https://img.shields.io/badge/Homebridge-491F59?style=for-the-badge&logo=homebridge&logoColor=white)](https://homebridge.io)
+
+**Admin**
+
+[![Pi-hole](https://img.shields.io/badge/Pi--hole-96060C?style=for-the-badge&logo=pihole&logoColor=white)](https://pi-hole.net)
+[![Caddy](https://img.shields.io/badge/Caddy-1F88C0?style=for-the-badge&logo=caddy&logoColor=white)](https://caddyserver.com)
+[![Arcane](https://img.shields.io/badge/Arcane-0F766E?style=for-the-badge)](https://github.com/getarcaneapp/arcane)
+[![starbase-80](https://img.shields.io/badge/starbase--80-5B6478?style=for-the-badge)](https://github.com/notclickable-jordan/starbase-80)
+
+**Monitoring**
+
+[![Beszel](https://img.shields.io/badge/Beszel-2F855A?style=for-the-badge)](https://beszel.dev)
+[![Dozzle](https://img.shields.io/badge/Dozzle-3A7BD5?style=for-the-badge)](https://dozzle.dev)
+[![Diun](https://img.shields.io/badge/Diun-795548?style=for-the-badge)](https://crazymax.dev/diun/)
+
+</div>
 
 | Service | Image | Port | Purpose |
 |---|---|---|---|
@@ -49,6 +95,67 @@ job with automatic rollback.
 **All images are pinned by digest.** Caddy is the one exception — it is built
 here, because the official image ships no DNS provider modules, so its pin is the
 `CADDY_VERSION` build arg.
+
+### How it fits together
+
+Two paths, and the certificate one is why this works at all: **nothing ever
+connects *in* from the internet.**
+
+```mermaid
+flowchart LR
+    CLI["LAN clients<br/>phones, laptops, TV"]
+    REM["Device away<br/>from home"]
+
+    subgraph pi["Raspberry Pi 4"]
+        direction TB
+        NFT["nftables<br/>default-deny inbound"]
+        PH["Pi-hole :53<br/>host network"]
+        TS["tailscaled<br/>subnet router"]
+        CAD["Caddy :443<br/>one wildcard cert"]
+        APPS["Service UIs<br/>Transmission, Homebridge, files,<br/>paste, dashboard, Arcane,<br/>logs, metrics, Pi-hole admin"]
+        PLEX["Plex :32400<br/>deliberately unproxied"]
+        SMB["Samba :445"]
+    end
+
+    subgraph net["Internet"]
+        direction TB
+        UP["Upstream resolvers"]
+        DUCK["DuckDNS<br/>A record -> the Pi<br/>+ the ACME TXT record"]
+        LE["Let's Encrypt"]
+    end
+
+    CLI -->|"1 - DNS"| PH
+    PH -->|"blocked -> 0.0.0.0"| CLI
+    PH -->|"else forward"| UP
+    CLI -->|"2 - HTTPS"| NFT
+    NFT --> CAD
+    NFT --> PLEX
+    CAD --> APPS
+    CAD -->|"3 - writes TXT"| DUCK
+    LE -.->|"reads it. No inbound needed"| DUCK
+    LE -->|"issues *.your.duckdns.org"| CAD
+    REM -.->|"WireGuard"| TS
+    TS --> CAD
+    TS --> SMB
+```
+
+The awkward part is step 3. Behind CGNAT, Let's Encrypt can never reach port 80
+here, so the usual HTTP challenge is impossible. DNS-01 proves control of the
+*name* instead, which needs no inbound connection — see [§7.1](#71-https-works-because-of-dns-01-not-because-anything-is-exposed).
+
+### Where state lives, and how it survives
+
+The SD card holds everything mutable and is the thing most likely to die.
+
+```mermaid
+flowchart LR
+    APPS["Containers"] --> SD["SD card<br/>appdata/ — databases,<br/>configs, credentials"]
+    SD -->|"nightly core, ~70 MB, keeps 7"| BK["USB disk, ext4"]
+    SD -->|"weekly full, Sat, keeps 1"| BK
+    MED["Media, torrents"] --> BK
+    BK -->|"scheduled pull over SSH"| MAC["Your workstation<br/>the only off-box copy"]
+    RST["restore-test.sh"] -.->|"proves the archives<br/>actually restore"| BK
+```
 
 ---
 
