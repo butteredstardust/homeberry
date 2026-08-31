@@ -357,14 +357,41 @@ fi
 # green while those ports stayed wide open. Filtering happens in our own
 # nftables table, in both input AND forward, so containers are actually covered.
 #
-# The policy is "private sources may do anything, everything else is dropped".
-# The LAN loses nothing; the win is that a mis-clicked port forward on the
-# router no longer exposes a service whose password is `raspberry`.
+# Two tiers. Outer: private sources may do anything, everything else is
+# dropped — the LAN loses nothing, and a mis-clicked port forward on the router
+# no longer exposes a service whose password is `raspberry`. Inner: the admin
+# ports are additionally restricted to ADMIN_SOURCES, which is what defends
+# against a compromised device that is already inside the house.
+#
+# The inner tier is OFF until ADMIN_SOURCES is narrowed; see .env.example for
+# why that default is deliberate, and read the deadman-switch note below before
+# changing it.
 if run firewall; then
   say "Host firewall (nftables)"
   apt_install nftables
 
   install -o root -g root -m 755 "$STACK/config/nftables.conf" /etc/nftables.conf
+
+  # Tier 2. ADMIN_SOURCES is a SPACE-separated CIDR list in .env because that is
+  # what Caddy's remote_ip matcher wants; nft wants commas inside braces. One
+  # value, two syntaxes, converted here rather than asking anyone to keep two
+  # lists in step.
+  _admin_default='10.0.0.0/8 172.16.0.0/12 192.168.0.0/16'
+  _admin_src="${ADMIN_SOURCES:-$_admin_default}"
+  _admin_nft="$(printf '%s' "$_admin_src" | tr -s ' ' | sed 's/^ *//; s/ *$//; s/ /, /g')"
+  if [[ -z "$_admin_nft" ]]; then
+    warn "  ADMIN_SOURCES is empty — falling back to all of RFC1918 rather than"
+    warn "  writing a ruleset that would lock every source out of SSH"
+    _admin_nft="$(printf '%s' "$_admin_default" | sed 's/ /, /g')"
+    _admin_src="$_admin_default"
+  fi
+  sed -i "s|^define admin_sources = .*|define admin_sources = { $_admin_nft }|" \
+      /etc/nftables.conf
+  if ! grep -q "define admin_sources = { $_admin_nft }" /etc/nftables.conf; then
+    warn "could not write admin_sources into /etc/nftables.conf"
+    warn "the shipped file's 'define admin_sources' line must have been edited"
+    exit 1
+  fi
 
   # See the override file's header: the stock ExecStop flushes the ENTIRE
   # ruleset, Docker's rules included.
@@ -373,10 +400,33 @@ if run firewall; then
           /etc/systemd/system/nftables.service.d/override.conf
   systemctl daemon-reload
 
-  nft -c -f /etc/nftables.conf || warn "nftables.conf failed its syntax check — NOT enabling"
-  if nft -c -f /etc/nftables.conf; then
+  if ! nft -c -f /etc/nftables.conf; then
+    warn "  nftables.conf failed its syntax check — NOT enabling. The firewall is"
+    warn "  unchanged; nothing was applied."
+  else
+    # ⚠ DEADMAN SWITCH. Only armed when ADMIN_SOURCES has actually been
+    # narrowed, because the default cannot lock anyone out and a timer that
+    # tears down the firewall ten minutes after every provision run would be a
+    # worse problem than the one it solves. There is no serial console on a Pi.
+    _deadman=0
+    if [[ "$_admin_src" != "$_admin_default" ]]; then
+      _deadman=1
+      systemd-run --on-active=600 --unit=fw-deadman \
+        /usr/sbin/nft destroy table inet lanfw >/dev/null 2>&1 ||
+        warn "  could not arm the fw-deadman timer — applying anyway, be careful"
+    fi
+
     systemctl enable --now nftables
-    say "  firewall active; LAN access unchanged, non-private sources dropped"
+    say "  firewall active; non-private sources dropped"
+    say "  admin ports (22, 8080, 8581) restricted to: $_admin_src"
+    say "  ...plus anything on the tailnet, which is admitted by interface."
+    if (( _deadman )); then
+      warn "  ⚠ fw-deadman is armed: this ruleset SELF-DESTRUCTS in 10 minutes."
+      warn "  Open a NEW ssh session now and confirm it works. Do not test with"
+      warn "  the session you are in — it is already established and will pass"
+      warn "  regardless. Once you are sure:"
+      warn "      sudo systemctl stop fw-deadman.timer"
+    fi
   fi
 fi
 
@@ -1413,9 +1463,19 @@ cat <<EOF
     Plex          http://$LAN_IP:32400/web    (deliberately unproxied)
     Samba         smb://$LAN_IP/$DATA_SHARE_NAME
 
-  Fallbacks, for when Caddy or DuckDNS is broken:
-    :8084 dashboard  :8080 pi-hole  :9091 transmission  :8581 homebridge
-    :8082 files      :3552 arcane   :8083 paste
+  Fallbacks, for when Caddy or DuckDNS is broken. The container UIs bind to
+  127.0.0.1 only (BIND_ADDR), so they are NOT reachable as http://$LAN_IP:PORT
+  from another machine — that is deliberate, it stops any LAN device bypassing
+  Caddy and the ADMIN_SOURCES allowlist. Reach them over an ssh tunnel:
+
+      ssh -N -L 8084:127.0.0.1:8084 pi@$LAN_IP   # then http://127.0.0.1:8084
+
+    :8084 dashboard  :9091 transmission  :8082 files
+    :3552 arcane     :8083 paste         :8085 logs   :8086 metrics
+
+  These two are host-networked and DO answer on $LAN_IP directly, subject to
+  the ADMIN_SOURCES firewall tier:
+    :8080 pi-hole    :8581 homebridge
 
   Verify before you walk away:
     1. DNS works from another device on the LAN.

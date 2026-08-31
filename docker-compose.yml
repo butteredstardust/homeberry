@@ -167,7 +167,7 @@ services:
     image: lscr.io/linuxserver/transmission:latest@sha256:7356451f32395838628b241f33bcd7130df9302777fc23f80cbc7ca8b4997c02
     container_name: transmission
     ports:
-      - "9091:9091"          # web UI
+      - "${BIND_ADDR:-127.0.0.1}:9091:9091"   # web UI
       - "51413:51413/tcp"    # peer port
       - "51413:51413/udp"
     environment:
@@ -219,7 +219,7 @@ services:
     image: gtstef/filebrowser:stable@sha256:e2ac55ccbe53d63b3f1d7d5ea5b82edf589b005a4b747b59912f97c6ba4f969e
     container_name: filebrowser
     ports:
-      - "8082:80"
+      - "${BIND_ADDR:-127.0.0.1}:8082:80"
     # Everything lives in one directory: config.yaml, database.db. Both paths
     # come from FILEBROWSER_CONFIG / FILEBROWSER_DATABASE, baked into the image.
     volumes:
@@ -292,14 +292,129 @@ services:
   # and updated by quarterly-update.sh, which backs up first, health-gates, and
   # rolls back. Updating from the UI silently bypasses all three — same reasoning
   # as the Watchtower note above. Use Arcane to LOOK, and to start/stop/restart.
+  # ------------------------------------------------- Docker socket proxies --
+  # NOTHING below mounts /var/run/docker.sock any more. Three containers need
+  # the Docker API; all three now reach it through a filtering HTTP proxy that
+  # only forwards the endpoints each one actually uses.
+  #
+  # WHY THIS MATTERS: the Docker API is not authorisation-aware. Any process
+  # that can talk to the raw socket can create a container with the host root
+  # filesystem bind-mounted, which is root on the host. `:ro` on the socket
+  # mount does NOT change that — read-only is a property of the FILE, and the
+  # API does reads and writes over the same connection either way.
+  #
+  # TWO proxies, not one, because the two trust levels are genuinely different
+  # and a single proxy would give the read-only consumers write access they
+  # never use but an attacker would.
+  #
+  # ⚠ NEVER publish 2375. These have no TLS and no authentication of their own;
+  # `expose` is deliberate, `ports` would be a catastrophe. They sit on an
+  # `internal: true` network with no route off the box.
+
+  # Read-only plane: Dozzle and Diun. POST=0 makes this literally incapable of
+  # changing anything — it cannot start, stop, create or exec, so a compromise
+  # of either consumer yields information disclosure, not host compromise.
+  socket-proxy-ro:
+    <<: *common
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    container_name: socket-proxy-ro
+    networks: [socketproxy]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1      # Dozzle: list containers. Diun: enumerate images in use
+      IMAGES: 1          # Diun: inspect image digests
+      EVENTS: 1          # Dozzle: live container start/stop stream
+      PING: 1
+      VERSION: 1
+      INFO: 1
+      POST: 0            # <- the load-bearing one. No writes of any kind.
+      EXEC: 0
+      AUTH: 0
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      NODES: 0
+      TASKS: 0
+      SERVICES: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      BUILD: 0
+      COMMIT: 0
+      SESSION: 0
+      DISTRIBUTION: 0
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+      - /var/lib/haproxy
+    mem_limit: 64m
+
+  # Management plane: Arcane only. This one must allow writes, because
+  # starting and stopping containers IS what Arcane is for.
+  #
+  # ⚠ READ THIS BEFORE ASSUMING YOU ARE SAFE. With POST=1, Arcane can create a
+  # container, and a container can be created with a host bind mount. That is
+  # still root on this host by a longer road. What the proxy removes is the
+  # rest of the API surface — no exec into a running container, no secrets,
+  # no build, no swarm — and that is a real reduction, not a complete fix.
+  #
+  # If you do not actually manage containers from a browser, set
+  # SOCKET_PROXY_POST=0 in .env. Arcane degrades to a viewer, and this whole
+  # plane becomes incapable of changing the host. That is the safer default for
+  # most households and costs you the start/stop/restart buttons.
+  socket-proxy-rw:
+    <<: *common
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    container_name: socket-proxy-rw
+    networks: [socketproxy]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      EVENTS: 1
+      PING: 1
+      VERSION: 1
+      INFO: 1
+      DISTRIBUTION: 1    # Arcane's update-availability check; harmless, read-only
+      POST: ${SOCKET_PROXY_POST:-1}
+      # ⚠ EXEC STAYS 0, and upstream's own example turns it on. `docker exec`
+      # into any container running as root is a direct path to the host through
+      # any container that has a host path mounted. Arcane's terminal feature
+      # is the cost; it is not worth it here.
+      EXEC: 0
+      AUTH: 0
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      NODES: 0
+      TASKS: 0
+      SERVICES: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      BUILD: 0
+      COMMIT: 0
+      SESSION: 0
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+      - /var/lib/haproxy
+    mem_limit: 64m
+
   arcane:
     <<: *common
     image: ghcr.io/getarcaneapp/manager:latest@sha256:2425b5a3780c32b743d6229c5dd4ec245e9fe42f897e0d0c3f6276eed3873a5d
     container_name: arcane
     ports:
-      - "3552:3552"
+      - "${BIND_ADDR:-127.0.0.1}:3552:3552"
+    networks: [default, socketproxy]
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ./appdata/arcane:/app/data
       # Makes this stack show up on Arcane's "Projects" page. Added 2026-08-26
       # after the owner expected it to appear there automatically — it does not.
@@ -322,14 +437,14 @@ services:
       - /opt/pi-stack:/app/data/projects/pi-stack:ro
     environment:
       <<: *env
-      APP_URL: http://${LAN_IP:?set LAN_IP in .env}:3552
+      APP_URL: https://docker.${CADDY_DOMAIN:?set CADDY_DOMAIN in .env}
       ENCRYPTION_KEY: ${ARCANE_ENCRYPTION_KEY:?set ARCANE_ENCRYPTION_KEY in .env}
       JWT_SECRET: ${ARCANE_JWT_SECRET:?set ARCANE_JWT_SECRET in .env}
-    # It runs as PUID 1000, but the socket is root:docker mode 660 — without the
-    # host's docker GID the UI comes up and shows nothing at all. The GID is
-    # host-specific (985 here); provision.sh writes the real one into .env.
-    group_add:
-      - "${DOCKER_GID:-985}"
+      # No socket is mounted. Everything goes through the filtering proxy.
+      DOCKER_HOST: tcp://socket-proxy-rw:2375
+    # No `group_add` any more. It existed solely because the raw socket is
+    # root:docker mode 660; talking to the proxy over TCP needs no group at all,
+    # so Arcane no longer holds host `docker` group access even indirectly.
     cgroup: host
     # The image is DISTROLESS — no shell, no wget, no curl, so the usual
     # curl/wget healthcheck can never pass and would leave this permanently
@@ -380,7 +495,7 @@ services:
     image: danielszabo99/microbin:latest@sha256:6660e5ccad0d764fa3c0032464ffb8f4b4f28c92a2eb9e39202b94cdc5b68909
     container_name: microbin
     ports:
-      - "8083:8080"
+      - "${BIND_ADDR:-127.0.0.1}:8083:8080"
     # The image declares no USER, so it would run as ROOT, and it is not a
     # linuxserver image so PUID/PGID do nothing. Pinned explicitly to 1000:1000
     # so what it writes into appdata matches every other service here and
@@ -464,7 +579,7 @@ services:
       # ONLY as the break-glass route for when Caddy or DuckDNS is broken and
       # you need the dashboard to find everything else. Same reasoning as the
       # other services' original ports, which were all kept for that purpose.
-      - "8084:4173"
+      - "${BIND_ADDR:-127.0.0.1}:8084:4173"
     # ⚠ MUST RUN AS ROOT, unlike microbin which is pinned to 1000:1000.
     # docker-entrypoint.sh runs `sed -i` over /app/index.html and
     # /app/src/variables.ts and then `npm run build`, all inside root-owned 0644
@@ -537,12 +652,13 @@ services:
     ports:
       # Break-glass route only, same reasoning as starbase80's 8084 — the normal
       # way in is https://logs.${CADDY_DOMAIN} via Caddy.
-      - "8085:8080"
+      - "${BIND_ADDR:-127.0.0.1}:8085:8080"
+    networks: [default, socketproxy]
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./appdata/dozzle:/data
     environment:
       <<: *env
+      DOCKER_HOST: tcp://socket-proxy-ro:2375
       DOZZLE_AUTH_PROVIDER: simple
       DOZZLE_ENABLE_ACTIONS: "false"   # no start/stop/restart from the UI; Arcane owns that
       DOZZLE_NO_ANALYTICS: "true"
@@ -576,11 +692,12 @@ services:
     <<: *common
     image: crazymax/diun:latest@sha256:e324b793eb32dfb7f74d3a39421ebf090141caaadee69b8f78da63112408ee25
     container_name: diun
+    networks: [default, socketproxy]
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./appdata/diun:/data
     environment:
       <<: *env
+      DOCKER_HOST: tcp://socket-proxy-ro:2375
       # 06:00 daily. Deliberately not more often: tags here move weekly at most,
       # and every check is a registry round-trip per image.
       DIUN_WATCH_SCHEDULE: "0 6 * * *"
@@ -614,7 +731,7 @@ services:
     image: henrygd/beszel:0.18.8@sha256:4c51486968efa0b0a702c1b0967966a2e06fb250b7418f3072d2488faea27c51
     container_name: beszel
     ports:
-      - "8086:8090"          # break-glass; normal route is metrics.<domain>
+      - "${BIND_ADDR:-127.0.0.1}:8086:8090"   # break-glass; normal route is metrics.<domain>
     volumes:
       - ./appdata/beszel:/beszel_data
     environment:
@@ -680,6 +797,18 @@ services:
       LAN_IP: ${LAN_IP:?set LAN_IP in .env}
       LOCAL_DNS_NAME: ${LOCAL_DNS_NAME:-home.internal}
       LOCAL_HOSTNAME: ${LOCAL_HOSTNAME:-raspberrypi}
+      # Consumed by the Caddyfile's (adminonly) snippet as a remote_ip
+      # allowlist, and by config/nftables.conf as $admin_sources. ONE value
+      # feeds both halves of the admin tier so they cannot drift apart.
+      #
+      # ⚠ SUBSTITUTED AT PARSE TIME, so Caddy must be RESTARTED (not reloaded
+      # from an unchanged Caddyfile) for a change here to take effect:
+      #     docker compose up -d --force-recreate caddy
+      #
+      # The default is all of RFC1918 — no narrower than the firewall's outer
+      # tier, so a fresh build cannot lock anyone out of a Pi with no console.
+      # Narrowing it is the entire point; see .env.example.
+      ADMIN_SOURCES: ${ADMIN_SOURCES:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}
       # ⚠ READ AT RUNTIME as {env.DUCKDNS_TOKEN}, deliberately, rather than
       # substituted into the config at parse time — so the token does not show
       # up in `caddy adapt` output or in the admin API's config dump.
@@ -741,3 +870,11 @@ services:
       # whole exchange again — straight into the rate limit.
       start_period: 6m
     mem_limit: 256m
+
+# The proxies and their three consumers, and nothing else. `internal: true`
+# means this network has no gateway to the LAN or the internet, so port 2375 is
+# unreachable from anywhere except the containers explicitly attached here.
+networks:
+  default:
+  socketproxy:
+    internal: true

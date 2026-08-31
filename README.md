@@ -37,7 +37,9 @@ build manual and stops once the stack is up.
 
 ## 1. What you get
 
-Twelve containers plus native Samba, grouped the way the dashboard groups them.
+Twelve services plus native Samba, grouped the way the dashboard groups them.
+(Fourteen containers in total: two are `docker-socket-proxy` instances with no
+UI of their own — see §6.)
 
 | | Service | Image | Port | Purpose |
 |---|---|---|---|---|
@@ -54,6 +56,11 @@ Twelve containers plus native Samba, grouped the way the dashboard groups them.
 | **Monitoring** | [![Beszel](https://img.shields.io/badge/Beszel-2F855A?style=flat-square)](https://beszel.dev) | `henrygd/beszel` | `8086` | CPU, memory, disk, SMART history |
 | | [![Dozzle](https://img.shields.io/badge/Dozzle-3A7BD5?style=flat-square)](https://dozzle.dev) | `amir20/dozzle` | `8085` | Live container logs |
 | | [![Diun](https://img.shields.io/badge/Diun-795548?style=flat-square)](https://crazymax.dev/diun/) | `crazymax/diun` | — | Notifies when an image goes stale |
+
+**The Port column is the container's own port, not a LAN address.** Everything
+except `53`, `80`, `443`, `8080`, `8581`, `32400` and Samba is published on
+`127.0.0.1` only (`BIND_ADDR`); the supported way in is
+`https://<service>.<your-domain>` through Caddy. See §6.
 
 Plus, from `provision.sh`: nftables firewall, Tailscale (subnet router, optional),
 nine Pi-hole adlists, nightly + weekly backups with an off-box pull, a container
@@ -76,11 +83,13 @@ flowchart LR
 
     subgraph pi["Raspberry Pi 4"]
         direction TB
-        NFT["nftables<br/>default-deny inbound"]
+        NFT["nftables<br/>default-deny inbound<br/>+ admin ports to ADMIN_SOURCES"]
         PH["Pi-hole :53<br/>host network"]
         TS["tailscaled<br/>subnet router"]
         CAD["Caddy :443<br/>one wildcard cert"]
-        APPS["Service UIs<br/>Transmission, Homebridge, files,<br/>paste, dashboard, Arcane,<br/>logs, metrics, Pi-hole admin"]
+        ADM{"(adminonly)<br/>remote_ip in<br/>ADMIN_SOURCES?"}
+        APPS["Household UIs<br/>dashboard, paste"]
+        ADMIN["Admin UIs<br/>Pi-hole, files, torrents,<br/>Arcane, Homebridge, logs, metrics"]
         PLEX["Plex :32400<br/>deliberately unproxied"]
         SMB["Samba :445"]
     end
@@ -99,6 +108,9 @@ flowchart LR
     NFT --> CAD
     NFT --> PLEX
     CAD --> APPS
+    CAD --> ADM
+    ADM -->|"yes"| ADMIN
+    ADM -.->|"no - 403"| CLI
     CAD -->|"3 - writes TXT"| DUCK
     LE -.->|"reads it. No inbound needed"| DUCK
     LE -->|"issues *.your.duckdns.org"| CAD
@@ -419,19 +431,46 @@ This stack is designed for a **LAN-only box behind CGNAT**, reachable remotely
 only over Tailscale. Several deliberate trade-offs follow from that, and they are
 wrong for any other threat model:
 
-- **Arcane mounts the Docker socket, so its login is root on the host.** Whoever
-  reaches it can stop Pi-hole (LAN DNS for the whole house), read `.env`, and
-  delete the backups. `:ro` on the socket is theatre — the Docker API reads and
-  writes over the same socket. Give it your strongest password.
+- **Arcane's login is still root-equivalent, even behind the socket proxy.** No
+  container mounts `/var/run/docker.sock` directly; Arcane, Dozzle and Diun each
+  talk to a [`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
+  with a per-endpoint allowlist (`EXEC` off for both, `POST` off for the
+  read-only one). That removes the easy paths, not the class: anything that can
+  create a container can create one with `/` mounted. Set `SOCKET_PROXY_POST=0`
+  to make Arcane read-only if you only want the dashboard. Give it your
+  strongest password either way.
 - **MicroBin's `/upload/<id>` and `/raw/<id>` return full paste content with no
   credentials.** Only `/`, `/admin` and `/pastalist` are behind basic auth. That
   is upstream behaviour and is what makes links shareable. **Never paste secrets
   into it.**
 - **Pi-hole is a single point of failure for household DNS**, with no fallback
   resolver, by design (§2).
-- **The firewall does not defend against your own LAN.** Every RFC1918 source is
-  accepted. It exists to survive a mis-clicked port forward, not a compromised
-  device inside the house.
+- **LAN defence is opt-in, and ships off.** There are two tiers. The outer one
+  drops every non-private source and is always on — that is the mis-clicked
+  port forward. The inner one restricts the admin surface to `ADMIN_SOURCES`,
+  and its shipped default is all of RFC1918, i.e. exactly as permissive as the
+  outer tier. **Until you narrow it, a compromised TV or IoT bulb on your LAN
+  has the same access you do.** Narrowing it to your workstation is one line in
+  `.env` and covers both halves:
+
+  | | Enforced by | Covers |
+  |---|---|---|
+  | Layer 4 | `config/nftables.conf` `$admin_sources` | `22` SSH, `8080` Pi-hole, `8581` Homebridge |
+  | Layer 7 | `Caddyfile` `(adminonly)` | `pihole` `files` `torrents` `docker` `homebridge` `logs` `metrics` vhosts |
+
+  Caddy has to do the second half because every vhost arrives on the same
+  `:443` and is indistinguishable below layer 7. The tailnet is always admin —
+  nftables admits `tailscale0` by interface, Caddy allows `100.64.0.0/10`. Left
+  open on purpose: the dashboard, the pastebin, Plex, DNS, Samba, BitTorrent.
+
+  This is a **reachability tier, not authentication** — every service keeps its
+  own password. And read the deadman-switch note in `.env.example` before you
+  narrow it: there is no serial console on a Pi.
+- **Admin UIs are not reachable on the LAN by port number.** `BIND_ADDR`
+  publishes them on `127.0.0.1` only, so Caddy is a real chokepoint rather than
+  one of two doors. Use an ssh tunnel for break-glass access
+  (`ssh -N -L 8085:127.0.0.1:8085 pi@<ip>`). Setting `BIND_ADDR=0.0.0.0`
+  restores the old behaviour and makes `ADMIN_SOURCES` decorative.
 - **Filebrowser exposes the whole drive at `/srv`, including the backups.**
   Anyone logged in can delete them. FileBrowser Quantum's multi-source config is
   how to narrow that.
@@ -500,7 +539,7 @@ This is the one rule in this repo with no exceptions:
 
 | Port | Why forwarding it is unrecoverable |
 |---|---|
-| `3552` Arcane | mounts the Docker socket → **root on the host**. Can stop DNS for the house, read `.env`, delete backups |
+| `3552` Arcane | controls every container → **root-equivalent on the host**. Can stop DNS for the house, read `.env`, delete backups |
 | `8082` Filebrowser | whole drive at `/srv`, **including the backups** |
 | `9091` Transmission | RPC whitelist is disabled; a shared password is all that stands there |
 | `8083` MicroBin | `/raw/<id>` returns full content with **no credentials** — upstream behaviour, not configurable |
@@ -508,10 +547,15 @@ This is the one rule in this repo with no exceptions:
 | `8086` Beszel | **the first visitor becomes the owner** until an admin account exists, and it inventories the whole host |
 | `80` `443` Caddy | the front door to all of the above |
 
-The nftables firewall drops non-RFC1918 sources, so an accidental forward is
-caught — but it is a backstop, not the control. It also does **not** defend
-against a compromised device on your own LAN; that device is inside the allowed
-set.
+Two things reduce the blast radius of a mistake here, and neither is the
+control: the nftables firewall drops non-RFC1918 sources, and `BIND_ADDR` means
+most of the ports in that table are not even listening on the LAN — a forward
+of `8082` lands on a closed port. Only `80`/`443` (Caddy), `8080`, `8581`,
+`32400` and `51413` are bound LAN-wide at all. **Forwarding `443` still exposes
+everything in the table**, which is why the rule has no exceptions.
+
+Narrowing `ADMIN_SOURCES` is what defends against a compromised device on your
+own LAN; by default that device is inside the allowed set (§6).
 
 Under CGNAT a forward would not work anyway. **Do not let that be the reason it
 stays closed** — CGNAT is the ISP's decision to reverse, not yours.

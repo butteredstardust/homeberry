@@ -23,7 +23,7 @@
 # The apex is deliberately NOT in this certificate for the same reason.
 #
 # ⚠ NOTHING HERE SHOULD EVER BE PORT-FORWARDED ON THE ROUTER. Valid TLS does
-# not make Arcane (root on the host via the Docker socket), Pi-hole (DNS for the
+# not make Arcane (control of every container on the box), Pi-hole (DNS for the
 # whole house) or the dashboard (an index of every service here) safe to expose.
 # The point of this file is trusted certificates on the LAN, not remote access.
 # Under CGNAT a forward would not work anyway — do not treat that as the reason.
@@ -77,6 +77,38 @@
 	}
 }
 
+# ============================================================ admin allowlist ==
+# The per-vhost half of the two-tier scheme in config/nftables.conf. The
+# firewall cannot do this part: every name below arrives on the same TCP :443,
+# so at layer 4 docker.DOMAIN and home.DOMAIN are indistinguishable. Only Caddy
+# knows which vhost was asked for, so the vhost-level allowlist has to live
+# here — driven by the SAME ADMIN_SOURCES value from .env, so the two halves
+# cannot drift.
+#
+# ⚠ THIS IS NOT AUTHENTICATION. It is a reachability tier: it keeps a
+# compromised TV or IoT bulb on the LAN away from the admin UIs entirely,
+# rather than leaving it to guess their passwords. Every service behind it
+# keeps its own login; do not remove one because this exists.
+#
+# ⚠ CADDY MUST SEE THE REAL CLIENT ADDRESS FOR THIS TO MEAN ANYTHING. It does:
+# Docker publishes :443 with DNAT, which rewrites the destination and leaves
+# the source alone, so remote_ip sees the LAN client. Two consequences worth
+# knowing: a request from the Pi ITSELF arrives from the bridge gateway
+# (172.18.0.1), and if you ever put another reverse proxy in front of this one,
+# remote_ip becomes that proxy's address and this whole snippet silently
+# allows everything. Do not chain proxies without also configuring trusted_proxies.
+#
+# ⚠ 100.64.0.0/10 (the tailnet) is included below because at layer 7 there is
+# no interface to match on — a Tailscale peer is just an address. That range is
+# ALSO the ISP's CGNAT space, which looks alarming, but nothing from the
+# carrier side can reach :443 in the first place: nftables drops every
+# non-private source at input and admits the tailnet by interface name only.
+# The interface check happens before Caddy ever sees the packet.
+(adminonly) {
+	@notadmin not remote_ip {$ADMIN_SOURCES} 100.64.0.0/10
+	respond @notadmin "403 — this service is restricted to admin sources. See ADMIN_SOURCES in .env." 403
+}
+
 # Shared proxy hygiene. Caddy already sets X-Forwarded-For / -Proto / -Host and
 # passes the original Host through, which is all any of these apps need — but
 # WebSocket upgrades (Homebridge's log stream, Arcane's live container view)
@@ -88,6 +120,11 @@
 	import duckdns_tls
 
 	# ------------------------------------------------------------ dashboard --
+	# NOT behind (adminonly), by design: the dashboard and the pastebin are
+	# household services and every device in the house is meant to open them.
+	# The dashboard only LINKS to the admin UIs — an unauthorised source that
+	# follows one of those links gets the 403 at the far end, which is the
+	# intended experience rather than a bug to fix by widening the allowlist.
 	@home host home.{$CADDY_DOMAIN}
 	handle @home {
 		reverse_proxy starbase80:4173
@@ -100,17 +137,32 @@
 	# extra_hosts/host-gateway entry in docker-compose.yml is what makes this
 	# resolve to the bridge gateway (172.18.0.1). The nftables ruleset accepts
 	# it because 172.16/12 is RFC1918, which is already allowed wholesale.
+	#
+	# ⚠ EVERY ADMIN HANDLE FROM HERE ON USES `route { import adminonly; ... }`.
+	# The `route` is not decoration. Outside one, Caddy sorts directives by its
+	# own table rather than by the order written — `respond` does currently sort
+	# ahead of `reverse_proxy` (verified against Caddy 2.11.4), so the guard
+	# would still fire, but `redir` sorts ahead of BOTH and an unauthorised
+	# client would collect the 302 before the 403. `route` pins the written
+	# order, which makes the guard's position a property of this file rather
+	# than of Caddy's version.
 	@pihole host pihole.{$CADDY_DOMAIN}
 	handle @pihole {
-		# Pi-hole v6 serves nothing useful at /, so save everyone the click.
-		redir / /admin/ 302
-		reverse_proxy host.docker.internal:8080
+		route {
+			import adminonly
+			# Pi-hole v6 serves nothing useful at /, so save the click.
+			redir / /admin/ 302
+			reverse_proxy host.docker.internal:8080
+		}
 	}
 
 	# ---------------------------------------------------------- Filebrowser --
 	@files host files.{$CADDY_DOMAIN}
 	handle @files {
-		reverse_proxy filebrowser:80
+		route {
+			import adminonly
+			reverse_proxy filebrowser:80
+		}
 	}
 
 	# ------------------------------------------------------------- MicroBin --
@@ -133,17 +185,25 @@
 	# adding 172.18.* to rpc-whitelist, NOT disabling the RPC password.
 	@torrents host torrents.{$CADDY_DOMAIN}
 	handle @torrents {
-		redir / /transmission/web/ 302
-		reverse_proxy transmission:9091
+		route {
+			import adminonly
+			redir / /transmission/web/ 302
+			reverse_proxy transmission:9091
+		}
 	}
 
 	# --------------------------------------------------------------- Arcane --
-	# ⚠ This one mounts the Docker socket and is therefore root on the host:
-	# whoever logs in can stop Pi-hole and take DNS down for the house, read
-	# .env, or delete the backups. It is on the LAN only, and stays that way.
+	# ⚠ THE MOST DANGEROUS NAME IN THIS FILE. Arcane reaches the Docker API
+	# through socket-proxy-rw, which is deliberately narrowed (no EXEC, see
+	# docker-compose.yml) — but it can still start, stop and recreate every
+	# container, and a container can be given any host mount. Whoever logs in
+	# can take DNS down for the house or read .env. LAN only, admin only.
 	@docker host docker.{$CADDY_DOMAIN}
 	handle @docker {
-		reverse_proxy arcane:3552
+		route {
+			import adminonly
+			reverse_proxy arcane:3552
+		}
 	}
 
 	# ----------------------------------------------------------- Homebridge --
@@ -151,7 +211,10 @@
 	# not survive bridge networking, and HomeKit is entirely mDNS.
 	@homebridge host homebridge.{$CADDY_DOMAIN}
 	handle @homebridge {
-		reverse_proxy host.docker.internal:8581
+		route {
+			import adminonly
+			reverse_proxy host.docker.internal:8581
+		}
 	}
 
 	# --------------------------------------------------------------- Dozzle --
@@ -161,7 +224,10 @@
 	# forward 8085. Treat a Dozzle session as equivalent to reading .env.
 	@logs host logs.{$CADDY_DOMAIN}
 	handle @logs {
-		reverse_proxy dozzle:8080
+		route {
+			import adminonly
+			reverse_proxy dozzle:8080
+		}
 	}
 
 	# --------------------------------------------------------------- Beszel --
@@ -169,7 +235,10 @@
 	# through Caddy, so there is nothing to proxy for it here.
 	@metrics host metrics.{$CADDY_DOMAIN}
 	handle @metrics {
-		reverse_proxy beszel:8090
+		route {
+			import adminonly
+			reverse_proxy beszel:8090
+		}
 	}
 
 	# Anything else under the wildcard — a typo, or a service that was removed.

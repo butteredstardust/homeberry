@@ -33,8 +33,10 @@ figure is only useful if you know what healthy looked like. Example shape:
 All LAN-only, all behind the firewall (§6). **None is forwarded, and the reasons
 none may ever be are in [README §7.3](../README.md#73-tls-is-not-authorisation--never-forward-these-ports).**
 
-Since 2026-08-26 every web UI has an HTTPS name (§7.4). The `IP:port` column is
-kept deliberately as the break-glass route for when Caddy or DuckDNS is broken.
+Since 2026-08-26 every web UI has an HTTPS name (§7.4). The `Fallback` column is
+kept deliberately as the break-glass route for when Caddy or DuckDNS is broken —
+but read the note under the table before assuming it is reachable from another
+machine. It is not, by default.
 
 Every service uses the same username, `pi`, and a password you set in `.env`.
 A single shared password is a deliberate simplification for a LAN-only box; it
@@ -57,6 +59,23 @@ never the value.
 | MicroBin | `paste.` | `:8083` | `pi` | `.env` → `MICROBIN_PASSWORD` |
 | Samba | n/a — not HTTP | `smb://<LAN_IP>/<share>` | `pi` | `.env` → `SAMBA_PASSWORD` |
 | SSH | n/a | `:22` | `pi` | key only, password auth disabled |
+
+⚠ **The Fallback column is a loopback port, not a LAN address.** `BIND_ADDR`
+(default `127.0.0.1`) publishes every container UI on the Pi's loopback only, so
+`http://<LAN_IP>:8082` is refused from another machine. That is what makes Caddy
+a real chokepoint rather than one of two doors — otherwise any LAN device could
+skip it and the `ADMIN_SOURCES` allowlist with it.
+
+To use a fallback while Caddy or TLS is broken, tunnel it:
+
+```bash
+ssh -N -L 8082:127.0.0.1:8082 pi@<LAN_IP>    # then http://127.0.0.1:8082
+```
+
+Four fallbacks are *not* loopback-bound, because those services use
+`network_mode: host`: `:8080` (Pi-hole), `:8581` (Homebridge), `:32400` (Plex)
+and Samba. The first two are admin ports and are restricted to `ADMIN_SOURCES`
+by nftables instead — see §6.
 
 **Plex is deliberately unproxied.** It ships its own `*.plex.direct` certificate
 and its clients connect straight to `:32400`; a proxy in front tends to break
@@ -323,9 +342,23 @@ Mitigate immediately: set the router's DNS to `1.1.1.1`.
 
 ### 2.8 HTTPS broken
 
-Nothing is lost — every service kept its `IP:port` route (`:8084`, `:8080`,
-`:8082`, `:8083`, `:9091`, `:3552`, `:8581`) and `http://<LAN_IP>/` still
-reaches the dashboard. Diagnose with §7.4.
+Nothing is lost, but the way back in is narrower than it used to be. `:8080`
+(Pi-hole) and `:8581` (Homebridge) still answer on `<LAN_IP>` directly. The
+container UIs (`:8084`, `:8082`, `:8083`, `:9091`, `:3552`, `:8085`, `:8086`)
+are bound to loopback by `BIND_ADDR`, so reach them over ssh — one tunnel does
+all of them:
+
+```bash
+ssh -N -L 8084:127.0.0.1:8084 -L 8082:127.0.0.1:8082 -L 8083:127.0.0.1:8083 \
+       -L 9091:127.0.0.1:9091 -L 3552:127.0.0.1:3552 -L 8085:127.0.0.1:8085 \
+       -L 8086:127.0.0.1:8086 pi@<LAN_IP>
+```
+
+`http://<LAN_IP>/` also still reaches the dashboard, since Caddy serves that
+plain-HTTP site block without a certificate. Diagnose with §7.4.
+
+If ssh itself is refused, `ADMIN_SOURCES` is the first thing to check — you may
+be on the wrong machine. See §6.
 
 ---
 
@@ -475,15 +508,66 @@ nftables, nothing but Docker's own publish rules.
 | Rules | `nftables.conf` in this repo → `/etc/nftables.conf` |
 | Unit | `nftables.service`, enabled, plus a drop-in override |
 | Policy | input `drop`, forward `accept` with an explicit drop, output `accept` |
-| Allowed | all of RFC1918, link-local, loopback, ICMP/ICMPv6, DHCP replies |
-| Dropped | everything else — i.e. any public source address |
+| Tier 1 allowed | all of RFC1918, link-local, loopback, ICMP/ICMPv6, DHCP replies, `tailscale0` |
+| Tier 1 dropped | everything else — i.e. any public source address |
+| Tier 2 | `$admin_ports` (`22`, `8080`, `8581`) restricted to `$admin_sources` |
+| `$admin_sources` | generated from `ADMIN_SOURCES` in `.env` by `provision.sh firewall` |
 
-**What it buys.** The LAN keeps unrestricted access to everything, so nothing in
-the house behaves differently. The only traffic dropped is from a non-private
-source. Worth having because if a port forward is ever added on the router by
-accident, this is what stands between that mistake and an open Filebrowser. It is
-a backstop, not the control — see
+**Tier 1 — what it buys.** The LAN keeps unrestricted access to the household
+services, so nothing in the house behaves differently. The only traffic dropped
+is from a non-private source. Worth having because if a port forward is ever
+added on the router by accident, this is what stands between that mistake and an
+open Filebrowser. It is a backstop, not the control — see
 [README §7.3](../README.md#73-tls-is-not-authorisation--never-forward-these-ports).
+
+**Tier 2 — what it buys, and why it ships off.** Tier 1 does nothing against a
+device that is *already* on your LAN. Tier 2 is the answer: SSH, the Pi-hole
+admin panel and Homebridge are dropped for any private source outside
+`ADMIN_SOURCES`, so a compromised TV can stream Plex and resolve DNS but cannot
+reach the infrastructure. **The shipped default is all of RFC1918**, which makes
+it exactly as permissive as tier 1 — deliberately, because a first build on a Pi
+with no serial console must not be able to lock its owner out. It only starts
+doing anything once you narrow it:
+
+```bash
+# in .env
+ADMIN_SOURCES="192.168.0.50/32"        # your workstation, as a DHCP reservation
+```
+
+then re-run the phase — and read the deadman-switch recipe below first:
+
+```bash
+sudo bash provision.sh firewall
+```
+
+`provision.sh` arms `fw-deadman` automatically whenever `ADMIN_SOURCES` differs
+from the default, and tells you to stop the timer once you have confirmed access
+from a **new** session.
+
+**Tier 2 stops at layer 4, and that is not a gap — it is a split.** Once every
+web UI is behind Caddy on `:443`, the firewall cannot tell `docker.DOMAIN` from
+`home.DOMAIN`; they are the same TCP port. The per-vhost half lives in the
+`Caddyfile`'s `(adminonly)` snippet and covers `pihole` `files` `torrents`
+`docker` `homebridge` `logs` `metrics`. It reads the **same** `ADMIN_SOURCES`
+value, so the two cannot drift — but Caddy substitutes it at parse time, so a
+change needs a restart, not a reload:
+
+```bash
+docker compose up -d --force-recreate caddy
+```
+
+Left open on purpose: the dashboard (`home.`) and the pastebin (`paste.`).
+
+**The tailnet is always admin.** nftables accepts `tailscale0` by interface
+*before* the tier-2 rule (its order there is load-bearing — a tailnet peer's
+source is `100.64.0.0/10`, which is not in `ADMIN_SOURCES`, so the wrong order
+would kill remote SSH). Caddy has no interface to match on, so it allows
+`100.64.0.0/10` outright; that is safe only because tier 1 already drops every
+non-private source that did not arrive on `tailscale0`. **Joining a tailnet is
+the cheapest insurance against locking yourself out of your own firewall.**
+
+⚠ **This is a reachability tier, not authentication.** Every service keeps its
+own login. Do not remove one because this exists.
 
 **Why not ufw.** ufw filters in `filter`/INPUT. Docker DNATs published ports in
 `nat`/PREROUTING, which the kernel traverses **first**, so packets to 8082, 8083,
@@ -501,12 +585,18 @@ unchanged attack surface. Hence a `forward` chain here, not just `input`.
   it with a targeted `destroy`. The empty `ExecStop=` line in that file is
   load-bearing: systemd appends to list directives, so without it the stock flush
   still runs.
-- **No rule matches on an interface name.** `wlan0` exists but is down with no
-  connection profile; the box must survive a move to wifi. The Docker bridge name
+- **No rule matches on an interface name**, with the single deliberate exception
+  of `tailscale0` above. `wlan0` exists but is down with no connection profile;
+  the box must survive a move to wifi. The Docker bridge name
   (`br-fe956b41828c`) is derived from the compose project name and changes if
   that is renamed. Matching on source address avoids both.
+- **`define admin_sources` in `/etc/nftables.conf` is generated.** `provision.sh
+  firewall` rewrites that line from `.env` on every run, so editing it in place
+  survives until the next provision and then silently reverts — and worse,
+  leaves the Caddyfile's copy of the allowlist disagreeing with it. Edit `.env`.
 
-Caddy on `:443` needed no rule change — RFC1918 is already accepted wholesale.
+Caddy on `:443` needed no rule change — RFC1918 is already accepted wholesale,
+which is exactly why the vhost-level allowlist has to live in the Caddyfile.
 
 Inbound BitTorrent peers on 51413 are dropped by the forward chain. Academic
 under CGNAT (§10) — if that ever changes and you want a forwarded peer port, add
@@ -780,10 +870,14 @@ stayed `<LAN_IP>`.
 Added 2026-08-23. `ghcr.io/getarcaneapp/manager` (**not** `ofkm/arcane` — the
 project moved), arm64, port 3552, data in `appdata/arcane/arcane.db`.
 
-- **Needs `group_add: ["${DOCKER_GID}"]`.** It runs as PUID 1000 but
-  `/var/run/docker.sock` is `root:docker` mode 660 (**gid 985 here**). Without
-  it the UI loads and lists *nothing*, which looks like a bug rather than a
-  permission problem. `provision.sh` derives the real GID and rewrites `.env`.
+- **It does not mount the Docker socket.** It reaches the API over
+  `DOCKER_HOST=tcp://socket-proxy-rw:2375`, on the `internal: true`
+  `socketproxy` network. Consequence: **`group_add`/`DOCKER_GID` are no longer
+  needed by Arcane** — a TCP socket has no file permissions. `DOCKER_GID` is
+  still used by the native Beszel agent, so `provision.sh` still derives it.
+  Historical note: before the proxy, Arcane needed `group_add:
+  ["${DOCKER_GID}"]` because `/var/run/docker.sock` is `root:docker` mode 660,
+  and without it the UI loaded and listed *nothing*.
 - **The image is DISTROLESS** — no shell, no wget, no curl, so a curl/wget
   healthcheck can never pass and leaves it permanently unhealthy for
   `container-watchdog.sh` to restart in a loop. The binary has its own
@@ -791,9 +885,21 @@ project moved), arm64, port 3552, data in `appdata/arcane/arcane.db`.
 - Seeded login is **`arcane` / `arcane-admin`**, printed in the container log.
   The official docs claim admin/admin and are wrong. Renamed to `pi` 2026-08-25.
 
-⚠ **It mounts the Docker socket, so it is effectively root on the host.** `:ro`
-on the socket is theatre — one socket serves reads and writes alike. See
-[README §7.3](../README.md#73-tls-is-not-authorisation--never-forward-these-ports).
+⚠ **Still treat its login as root on the host, proxy or not.** `socket-proxy-rw`
+blocks `EXEC` and narrows the API to what Arcane actually uses, which removes
+the one-line "shell inside any container" path — but anything that can *create*
+a container can create one with `/` bind-mounted. The proxy reduces the blast
+radius of a bug in Arcane; it is not a privilege boundary between the person
+logged into Arcane and the host. Set `SOCKET_PROXY_POST=0` in `.env` to make it
+genuinely read-only. See
+[README §7.3](../README.md#73-tls-is-not-authorisation--never-forward-these-ports),
+and §7.9 for the proxy itself.
+
+⚠ **Historical note, since older copies of this file said otherwise:** Arcane
+used to mount `/var/run/docker.sock` directly, and the note here read "`:ro` on
+the socket is theatre — one socket serves reads and writes alike". That was
+true and is why the proxy exists: the Docker API is not authorisation-aware, so
+read-only had to be enforced *outside* it.
 
 **Leave its four risky jobs disabled.** All ship off and are verified false in
 `arcane.db` settings: `autoUpdate`, `autoHealEnabled`, `scheduledPruneEnabled`,
@@ -814,13 +920,15 @@ hand-deployed stack shows 9 containers and 0 projects. Added 2026-08-26:
 Arcane then logs `Discovered new project ... project=pi-stack` and reports
 running 9/9. Two things `:ro` does **not** do:
 
-- **Deploy / Redeploy / Stop still work.** They go over the Docker socket, which
-  is read-write, and write nothing to the project directory — the mount is
-  irrelevant to them. A stray click restarts the whole stack, Pi-hole included.
-  There is no `redeploy_disabled` column in Arcane's schema (it is computed, and
-  appears tied to `gitops_managed_by`), so those buttons cannot be greyed out.
-  **Treat the page as read-only by convention** — owner's call, 2026-08-26.
-- It is not a new privilege boundary. The Docker socket already made Arcane root.
+- **Deploy / Redeploy / Stop still work** (unless `SOCKET_PROXY_POST=0`). They
+  go over the Docker API, and write nothing to the project directory — the mount
+  is irrelevant to them. A stray click restarts the whole stack, Pi-hole
+  included. There is no `redeploy_disabled` column in Arcane's schema (it is
+  computed, and appears tied to `gitops_managed_by`), so those buttons cannot be
+  greyed out. **Treat the page as read-only by convention** — or set
+  `SOCKET_PROXY_POST=0` and have it enforced.
+- It is not a new privilege boundary. Arcane's API access is what makes it root,
+  and that is bounded by the socket proxy, not by this mount.
 
 What `:ro` *does* buy: no web-editor edits silently diverging from the git copy.
 
@@ -1328,9 +1436,11 @@ policy decision.
 
 **Restricting the client tiers to :443 costs nothing**, which is what makes this
 policy cheap to live with: Caddy already fronts every admin UI on 443
-(§7.4). A phone reaching `pihole.${CADDY_DOMAIN}` never needed 8080. The
-raw `8080-8086 / 3552 / 9091` ports stay break-glass, and break-glass is the
-Mac's job. Plex is the one exception — unproxied by design, hence `tcp:32400`.
+(§7.4). A phone reaching `pihole.${CADDY_DOMAIN}` never needed 8080. Break-glass
+is the Mac's job, and it now costs even less than it did: the container UIs are
+loopback-bound (`BIND_ADDR`), so break-glass means an ssh tunnel (§2.8) rather
+than a raw port over the tailnet. Only `8080` and `8581` remain directly
+reachable, from `ADMIN_SOURCES` or the tailnet. Plex is the one exception — unproxied by design, hence `tcp:32400`.
 
 ⚠ **The Pi has two addresses and every rule must name BOTH.** `<PI_TAILNET_IP>`
 and `<LAN_IP>` are the same host, and `<LAN_IP>` is inside the
@@ -1420,10 +1530,15 @@ environment dumps, tokens in stack traces, and full file paths. Hence:
 - `DOZZLE_ENABLE_ACTIONS: "false"` — no start/stop/restart buttons from the log
   viewer. Arcane already does container management, behind its own password;
   there is no reason for a second, weaker path to the same power.
-- Socket mounted `:ro`. Unlike Arcane's, this one is *meaningful* — Dozzle only
-  reads — but it is still not a security boundary, because reading the socket
-  reveals every container's full environment.
-- **Never forward 8085.**
+- **No socket mount.** Dozzle reaches the API through `socket-proxy-ro`
+  (`DOCKER_HOST=tcp://socket-proxy-ro:2375`), which allows `CONTAINERS`,
+  `IMAGES`, `EVENTS`, `PING`, `VERSION`, `INFO` and — the part that matters —
+  refuses `POST` and `EXEC`. So Dozzle genuinely *cannot* write, which a `:ro`
+  socket mount could never have guaranteed. It is still not a confidentiality
+  boundary: reading container metadata reveals every container's full
+  environment, which is why the login above stays.
+- **Never forward 8085.** It is also loopback-bound (`BIND_ADDR`) and behind
+  `(adminonly)`, so this is now three layers deep — keep it that way.
 
 The password was generated on the Pi and never printed to a terminal. It lives in
 `/opt/pi-stack/.env` (mode 600) as `DOZZLE_PASSWORD`; the bcrypt hash of it lives
@@ -1562,6 +1677,67 @@ sudo ss -lntp | grep 45876 || echo "no listener, as intended"
 sudo docker stats --no-stream --format "{{.Name}}\t{{.MemUsage}}" \
   dozzle diun beszel
 systemctl show beszel-agent -p MemoryCurrent
+```
+
+---
+
+### 7.9 Docker socket proxies
+
+**No container on this box mounts `/var/run/docker.sock`.** Three want the
+Docker API — Arcane, Dozzle, Diun — and all three reach it over TCP through a
+[`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
+instead. There are two instances because they want different things:
+
+| | `socket-proxy-ro` | `socket-proxy-rw` |
+|---|---|---|
+| Used by | Dozzle, Diun | Arcane |
+| Allowed | `CONTAINERS` `IMAGES` `EVENTS` `PING` `VERSION` `INFO` | the above plus `NETWORKS` `VOLUMES` `DISTRIBUTION` |
+| `POST` | **0** — cannot change anything | `${SOCKET_PROXY_POST:-1}` |
+| `EXEC` | **0** | **0** |
+| Everything else | 0 | 0 |
+
+**Why this is not just tidiness.** The Docker API is not authorisation-aware:
+there is one socket, and it serves reads and writes alike. Mounting it `:ro`
+sets a *file* permission on the socket node and changes nothing about what the
+API will do — the old note in §7.5 said exactly this. The only place a
+read/write distinction can be enforced is in front of the API, which is what the
+proxy is. `POST: 0` is what makes "Dozzle is read-only" a fact rather than an
+intention.
+
+**`EXEC: 0` on both, including the read-write one.** Upstream's own example
+enables it. It is refused here: `EXEC` is a one-line path to a shell inside any
+container, which on this box includes Pi-hole and Caddy. Arcane's terminal
+feature stops working; that is the intended trade.
+
+⚠ **`docker-socket-proxy` speaks plain HTTP with no authentication.** Its only
+protection is that it is unreachable. Both instances sit on the `socketproxy`
+network, declared `internal: true`, and publish **no ports**. Never add a
+`ports:` entry to either — publishing `2375` hands root on the host to anything
+that can reach it.
+
+⚠ **`socketproxy` is `internal: true`, which means no outbound route.** Services
+attached to it list `networks: [default, socketproxy]` explicitly; naming any
+network removes a service from `default` unless `default` is also listed, and
+losing it would leave Arcane unable to reach Caddy or the internet.
+
+To make Arcane a read-only dashboard, set `SOCKET_PROXY_POST=0` in `.env` and
+recreate it. The buttons stay in the UI and fail — Arcane has no way to hide
+them (§7.5).
+
+Verify nothing regressed:
+
+```bash
+# nothing should mount the socket except the two proxies
+sudo docker ps --format '{{.Names}}' | while read -r c; do
+  sudo docker inspect "$c" --format '{{.Name}} {{range .Mounts}}{{.Source}} {{end}}' \
+    | grep docker.sock
+done
+
+# neither proxy publishes a port
+sudo docker compose -f /opt/pi-stack/docker-compose.yml ps socket-proxy-ro socket-proxy-rw
+
+# the network really is internal
+sudo docker network inspect pi-stack_socketproxy --format '{{.Internal}}'   # true
 ```
 
 ---
