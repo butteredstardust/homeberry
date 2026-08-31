@@ -416,7 +416,11 @@ if run firewall; then
         warn "  could not arm the fw-deadman timer — applying anyway, be careful"
     fi
 
+    # `enable --now` does not restart an already-active oneshot service, so on
+    # an existing Pi it can leave the previous kernel ruleset live even though
+    # /etc/nftables.conf was replaced above. Always load the validated file.
     systemctl enable --now nftables
+    nft -f /etc/nftables.conf
     say "  firewall active; non-private sources dropped"
     say "  admin ports (22, 8080, 8581) restricted to: $_admin_src"
     say "  ...plus anything on the tailnet, which is admitted by interface."

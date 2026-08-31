@@ -611,6 +611,7 @@ reasoning and how to undo it.
 │  ├─ samba-tailscale-ordering.conf
 │  ├─ ssh-hardening.conf               → sshd_config.d/
 │  ├─ filebrowser-config.yaml
+│  ├─ docker-socket-proxy-haproxy.cfg  upstream template + hard EXEC deny
 │  ├─ pihole-adlists.txt               declarative adlists -> gravity.db
 │  ├─ starbase80-config.json.tmpl      dashboard links; rendered by provision.sh
 │  └─ tailscale-policy.hujson.example  → PASTED into the Tailscale admin

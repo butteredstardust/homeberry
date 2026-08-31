@@ -69,6 +69,9 @@ CHANNELS=(
   "starbase80|jordanroher/starbase-80:latest"
   "dozzle|amir20/dozzle:latest"
   "diun|crazymax/diun:latest"
+  # Both proxy services use this same pin. The rewrite is repository-wide, so
+  # one channel entry deliberately updates both occurrences together.
+  "socket-proxy|ghcr.io/tecnativa/docker-socket-proxy:0.3.0"
 )
 
 # ⚠ CADDY IS NOT IN THE LIST ABOVE, ON PURPOSE. It is the one service that is
@@ -212,14 +215,16 @@ for entry in "${CHANNELS[@]}"; do
     continue
   fi
 
-  current="$(grep -oE "^[[:space:]]*image:[[:space:]]*${repo}[^[:space:]]*" "$COMPOSE" | head -1)"
-  if [[ "$current" == *"$digest"* ]]; then
+  current="$(grep -oE "^[[:space:]]*image:[[:space:]]*${repo}[^[:space:]]*" "$COMPOSE" || true)"
+  # A repository may intentionally appear more than once (both socket proxies
+  # use the same image). It is current only when EVERY occurrence has the
+  # resolved digest; this also repairs partial/manual edits on the next run.
+  if [[ -n "$current" ]] && ! grep -Fqv "$digest" <<<"$current"; then
     say "  $svc: already current"
     continue
   fi
 
-  # Rewrite the pin in place. The repo string is unique per file, so anchoring
-  # on it is safe and leaves comments and formatting untouched.
+  # Rewrite every occurrence in place, leaving comments and formatting intact.
   sed -i -E "s|^([[:space:]]*image:[[:space:]]*)${repo}[^[:space:]]*|\1${repo}:${tag}@${digest}|" "$COMPOSE"
   say "  $svc: re-pinned to ${digest:0:19}..."
   log "$svc updated to $digest"

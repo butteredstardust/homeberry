@@ -872,7 +872,7 @@ project moved), arm64, port 3552, data in `appdata/arcane/arcane.db`.
 
 - **It does not mount the Docker socket.** It reaches the API over
   `DOCKER_HOST=tcp://socket-proxy-rw:2375`, on the `internal: true`
-  `socketproxy` network. Consequence: **`group_add`/`DOCKER_GID` are no longer
+  `socketproxy_rw` network. Consequence: **`group_add`/`DOCKER_GID` are no longer
   needed by Arcane** — a TCP socket has no file permissions. `DOCKER_GID` is
   still used by the native Beszel agent, so `provision.sh` still derives it.
   Historical note: before the proxy, Arcane needed `group_add:
@@ -1683,8 +1683,9 @@ systemctl show beszel-agent -p MemoryCurrent
 
 ### 7.9 Docker socket proxies
 
-**No container on this box mounts `/var/run/docker.sock`.** Three want the
-Docker API — Arcane, Dozzle, Diun — and all three reach it over TCP through a
+**No application container on this box mounts `/var/run/docker.sock`.** The two
+proxy containers necessarily mount it read-only. Arcane, Dozzle and Diun reach
+the API over TCP through a
 [`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
 instead. There are two instances because they want different things:
 
@@ -1709,16 +1710,27 @@ enables it. It is refused here: `EXEC` is a one-line path to a shell inside any
 container, which on this box includes Pi-hole and Caddy. Arcane's terminal
 feature stops working; that is the intended trade.
 
-⚠ **`docker-socket-proxy` speaks plain HTTP with no authentication.** Its only
-protection is that it is unreachable. Both instances sit on the `socketproxy`
-network, declared `internal: true`, and publish **no ports**. Never add a
-`ports:` entry to either — publishing `2375` hands root on the host to anything
-that can reach it.
+The pinned `0.3.0` image's generic `CONTAINERS` ACL also matches
+`POST /containers/<id>/exec`, before its `EXEC` ACL is evaluated. Both proxies
+therefore mount `config/docker-socket-proxy-haproxy.cfg`, an upstream-derived
+template with an earlier unconditional deny for exec creation. Keep that mount:
+setting `EXEC=0` alone does **not** block this path in `0.3.0`. The image also
+renders `haproxy.cfg` beside its template at startup, so its root filesystem
+cannot be `read_only`; the socket and patched template mounts remain read-only.
 
-⚠ **`socketproxy` is `internal: true`, which means no outbound route.** Services
-attached to it list `networks: [default, socketproxy]` explicitly; naming any
-network removes a service from `default` unless `default` is also listed, and
-losing it would leave Arcane unable to reach Caddy or the internet.
+⚠ **`docker-socket-proxy` speaks plain HTTP with no authentication.** Its only
+protection is network reachability. The read-only and read-write planes use
+separate `internal: true` networks: `socketproxy_ro` contains only Dozzle, Diun
+and `socket-proxy-ro`; `socketproxy_rw` contains only Arcane and
+`socket-proxy-rw`. Sharing one network would let a compromised read-only
+consumer bypass its proxy and call the read-write one directly. Neither proxy
+publishes a port. Never add one — publishing `2375` hands root on the host to
+anything that can reach it.
+
+⚠ **Both socket-proxy networks are `internal: true`, with no outbound route.**
+Consumers list `default` as well as their proxy network explicitly; naming any
+network removes a service from `default` unless it is listed, and losing it
+would leave Arcane unable to reach Caddy or the internet.
 
 To make Arcane a read-only dashboard, set `SOCKET_PROXY_POST=0` in `.env` and
 recreate it. The buttons stay in the UI and fail — Arcane has no way to hide
@@ -1736,8 +1748,9 @@ done
 # neither proxy publishes a port
 sudo docker compose -f /opt/pi-stack/docker-compose.yml ps socket-proxy-ro socket-proxy-rw
 
-# the network really is internal
-sudo docker network inspect pi-stack_socketproxy --format '{{.Internal}}'   # true
+# both trust-plane networks are internal
+sudo docker network inspect pi-stack_socketproxy_ro pi-stack_socketproxy_rw \
+  --format '{{.Name}} {{.Internal}}'   # both true
 ```
 
 ---

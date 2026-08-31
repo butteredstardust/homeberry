@@ -293,9 +293,10 @@ services:
   # rolls back. Updating from the UI silently bypasses all three — same reasoning
   # as the Watchtower note above. Use Arcane to LOOK, and to start/stop/restart.
   # ------------------------------------------------- Docker socket proxies --
-  # NOTHING below mounts /var/run/docker.sock any more. Three containers need
-  # the Docker API; all three now reach it through a filtering HTTP proxy that
-  # only forwards the endpoints each one actually uses.
+  # No APPLICATION container below mounts /var/run/docker.sock any more. Three
+  # need the Docker API; all three now reach it through a filtering HTTP proxy
+  # that only forwards the endpoints each one actually uses. The two proxies
+  # themselves necessarily mount the socket, read-only at the filesystem layer.
   #
   # WHY THIS MATTERS: the Docker API is not authorisation-aware. Any process
   # that can talk to the raw socket can create a container with the host root
@@ -305,7 +306,9 @@ services:
   #
   # TWO proxies, not one, because the two trust levels are genuinely different
   # and a single proxy would give the read-only consumers write access they
-  # never use but an attacker would.
+  # never use but an attacker would. They also use separate internal networks:
+  # sharing one would let a compromised read-only consumer simply address the
+  # read-write proxy by name and bypass its configured DOCKER_HOST.
   #
   # ⚠ NEVER publish 2375. These have no TLS and no authentication of their own;
   # `expose` is deliberate, `ports` would be a catastrophe. They sit on an
@@ -316,11 +319,14 @@ services:
   # of either consumer yields information disclosure, not host compromise.
   socket-proxy-ro:
     <<: *common
-    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2
     container_name: socket-proxy-ro
-    networks: [socketproxy]
+    networks: [socketproxy_ro]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Upstream 0.3.0 lets the CONTAINERS ACL shadow EXEC=0 for exec creation.
+      # This patched template adds an explicit early deny for that path.
+      - ./config/docker-socket-proxy-haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg.template:ro
     environment:
       CONTAINERS: 1      # Dozzle: list containers. Diun: enumerate images in use
       IMAGES: 1          # Diun: inspect image digests
@@ -345,7 +351,9 @@ services:
       DISTRIBUTION: 0
     security_opt:
       - no-new-privileges:true
-    read_only: true
+    # v0.3.0 renders haproxy.cfg beside its template at startup, so the image
+    # cannot boot with a read-only root filesystem. The Docker socket mount
+    # itself stays read-only; API writes are controlled by POST below.
     tmpfs:
       - /run
       - /var/lib/haproxy
@@ -366,11 +374,13 @@ services:
   # most households and costs you the start/stop/restart buttons.
   socket-proxy-rw:
     <<: *common
-    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2
     container_name: socket-proxy-rw
-    networks: [socketproxy]
+    networks: [socketproxy_rw]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Keep the same hard deny on both planes; EXEC is never needed here.
+      - ./config/docker-socket-proxy-haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg.template:ro
     environment:
       CONTAINERS: 1
       IMAGES: 1
@@ -401,7 +411,9 @@ services:
       SESSION: 0
     security_opt:
       - no-new-privileges:true
-    read_only: true
+    # v0.3.0 renders haproxy.cfg beside its template at startup, so the image
+    # cannot boot with a read-only root filesystem. The Docker socket mount
+    # itself stays read-only; API writes are controlled by POST below.
     tmpfs:
       - /run
       - /var/lib/haproxy
@@ -413,7 +425,7 @@ services:
     container_name: arcane
     ports:
       - "${BIND_ADDR:-127.0.0.1}:3552:3552"
-    networks: [default, socketproxy]
+    networks: [default, socketproxy_rw]
     volumes:
       - ./appdata/arcane:/app/data
       # Makes this stack show up on Arcane's "Projects" page. Added 2026-08-26
@@ -653,7 +665,7 @@ services:
       # Break-glass route only, same reasoning as starbase80's 8084 — the normal
       # way in is https://logs.${CADDY_DOMAIN} via Caddy.
       - "${BIND_ADDR:-127.0.0.1}:8085:8080"
-    networks: [default, socketproxy]
+    networks: [default, socketproxy_ro]
     volumes:
       - ./appdata/dozzle:/data
     environment:
@@ -692,7 +704,7 @@ services:
     <<: *common
     image: crazymax/diun:latest@sha256:e324b793eb32dfb7f74d3a39421ebf090141caaadee69b8f78da63112408ee25
     container_name: diun
-    networks: [default, socketproxy]
+    networks: [default, socketproxy_ro]
     volumes:
       - ./appdata/diun:/data
     environment:
@@ -871,10 +883,12 @@ services:
       start_period: 6m
     mem_limit: 256m
 
-# The proxies and their three consumers, and nothing else. `internal: true`
-# means this network has no gateway to the LAN or the internet, so port 2375 is
-# unreachable from anywhere except the containers explicitly attached here.
+# Each trust plane has its own `internal: true` network. Neither has a gateway
+# to the LAN or internet, and the split prevents read-only consumers from
+# bypassing their proxy by addressing the read-write proxy directly.
 networks:
   default:
-  socketproxy:
+  socketproxy_ro:
+    internal: true
+  socketproxy_rw:
     internal: true
