@@ -1,0 +1,95 @@
+[
+	{
+		"__comment": "TEMPLATE. provision.sh substitutes ${LAN_IP}, ${CADDY_DOMAIN} and ${DATA_SHARE_NAME} from .env and writes the result to appdata/starbase80/config.json. Edit this file, not the generated one — the generated one is overwritten on every provision run. ⚠ A malformed config.json does not just break the page: starbase80 runs a full Vite build at container start, so a JSON syntax error kills the container.",
+		"__warning": "Do not put credentials in descriptions. This page is the one place that lists every service on the box, and it is served without an authorisation check of its own.",
+		"category": "Media",
+		"services": [
+			{
+				"name": "Plex",
+				"uri": "http://${LAN_IP}:32400/web",
+				"description": "Films, TV, music",
+				"icon": "/icons/plex.png"
+			},
+			{
+				"name": "Transmission",
+				"uri": "https://torrents.${CADDY_DOMAIN}/",
+				"description": "Torrents",
+				"icon": "/icons/transmission.png"
+			}
+		]
+	},
+	{
+		"category": "Files",
+		"services": [
+			{
+				"name": "Filebrowser",
+				"uri": "https://files.${CADDY_DOMAIN}",
+				"description": "Browse the drive",
+				"icon": "/icons/filebrowser.png"
+			},
+			{
+				"name": "Samba share",
+				"uri": "smb://${LAN_IP}/${DATA_SHARE_NAME}",
+				"description": "Mount the data drive in Finder / Explorer",
+				"icon": "/icons/samba-server.png"
+			},
+			{
+				"name": "MicroBin",
+				"uri": "https://paste.${CADDY_DOMAIN}",
+				"description": "Paste text between machines · no secrets",
+				"icon": "/icons/microbin.png"
+			}
+		]
+	},
+	{
+		"category": "Home",
+		"services": [
+			{
+				"name": "Homebridge",
+				"uri": "https://homebridge.${CADDY_DOMAIN}",
+				"description": "HomeKit bridge",
+				"icon": "/icons/homebridge.png"
+			}
+		]
+	},
+	{
+		"category": "Admin",
+		"services": [
+			{
+				"name": "Pi-hole",
+				"uri": "https://pihole.${CADDY_DOMAIN}/admin/",
+				"description": "DNS and ad blocking · password only, no username",
+				"icon": "/icons/pi-hole.png"
+			},
+			{
+				"name": "Arcane",
+				"uri": "https://docker.${CADDY_DOMAIN}",
+				"description": "Docker management · root-equivalent, treat accordingly",
+				"icon": "/icons/arcane.png"
+			},
+			{
+				"name": "Tailscale",
+				"uri": "https://login.tailscale.com/admin/machines",
+				"description": "Remote access · admin console, not on this Pi",
+				"icon": "/icons/tailscale.png"
+			}
+		]
+	},
+	{
+		"category": "Monitoring",
+		"services": [
+			{
+				"name": "Beszel",
+				"uri": "https://metrics.${CADDY_DOMAIN}",
+				"description": "CPU, memory, disk and network history",
+				"icon": "/icons/beszel.png"
+			},
+			{
+				"name": "Dozzle",
+				"uri": "https://logs.${CADDY_DOMAIN}",
+				"description": "Live container logs",
+				"icon": "/icons/dozzle.png"
+			}
+		]
+	}
+]

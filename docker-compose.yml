@@ -1,0 +1,735 @@
+# The entire machine definition. Keep this in git; the OS is disposable.
+#
+# Images are PINNED BY DIGEST on purpose — immutable and reproducible. The
+# `:latest` in each reference is only a human-readable note of which channel the
+# digest came from; the digest is what actually gets pulled.
+#
+# These pins are rewritten automatically by quarterly-update.sh (first Saturday
+# of Jan/Apr/Jul/Oct), which backs up first, health-checks after, and rolls back
+# to the previous file if any service fails to answer.
+#
+# Still do NOT add Watchtower. The distinction is not automatic vs manual — it
+# is that Watchtower pulls continuously with no backup, no health gate and no
+# way back, so a bad image leaves the house without DNS until someone notices.
+#
+# To update by hand between quarters:
+#     sudo systemctl start pi-quarterly-update.service
+#
+# DATA_ROOT (see .env) is bind-mounted at the SAME path inside the containers
+# so a restored Plex database and Transmission settings.json keep working
+# without any path rewriting. Change it before first run or not at all —
+# renaming it later orphans Plex's library locations and loses watch state.
+
+name: pi-stack
+
+x-common: &common
+  restart: unless-stopped
+  environment: &env
+    PUID: 1000
+    PGID: 1000
+    TZ: ${TZ:-Etc/UTC}
+
+services:
+
+  # ---------------------------------------------------------------- Pi-hole --
+  # host networking is mandatory: it needs to own :53 on the LAN address and
+  # answer from the same IP the router advertises (${LAN_IP}).
+  pihole:
+    <<: *common
+    image: pihole/pihole:latest@sha256:f7d1be836e3bc608b56d82fc9904f5a831cdfbc0dc9c6d58f94e4c985c70038b
+    container_name: pihole
+    network_mode: host
+    environment:
+      <<: *env
+      FTLCONF_webserver_api_password: ${PIHOLE_PASSWORD:?set PIHOLE_PASSWORD in .env}
+      FTLCONF_dns_upstreams: ${PIHOLE_UPSTREAMS:-208.67.222.222;208.67.220.220}
+      FTLCONF_dns_listeningMode: all
+      # Local DNS records, so the LAN can use names instead of ports and IPs.
+      # `.internal` is ICANN's reserved private-use TLD — it cannot ever collide
+      # with a real domain, unlike `.lan`, and it does not fight mDNS the way
+      # `.local` would.
+      #
+      # ⚠ This works ONLY for clients resolving through this Pi-hole. A device
+      # with hardcoded DNS (many smart TVs, phones on cellular) sees nothing —
+      # that is why the dashboard's Plex and Samba links stay raw IPs, not names.
+      #
+      # ⚠ Semicolon-separated, like dns_upstreams above; Pi-hole v6 splits array
+      # env vars on `;`. A comma silently produces ONE malformed record.
+      # ⚠ Pi-hole owns pihole.toml and rewrites it. Declare records HERE, not by
+      # editing that file or via the web UI, or the next container recreate
+      # discards them.
+      FTLCONF_dns_hosts: "${LAN_IP:?set LAN_IP in .env} ${LOCAL_DNS_NAME:-home.internal}"
+      # The old box served the UI on 8080 (not 80), and the Teleporter import
+      # restores that setting. Pinned here so it is declared rather than
+      # inherited from whatever archive was last imported.
+      # ⚠ Ports 80 AND 443 are owned by CADDY as of 2026-08-26. Do not move
+      # Pi-hole onto either.
+      #
+      # ⚠ 443 WAS LISTED HERE AND WAS REMOVED — that is what freed the port for
+      # Caddy. pihole-FTL binds every port in this string itself, so leaving
+      # `443os` in place makes Caddy fail to start with "address already in
+      # use" and takes down every HTTPS name at once. The `s` suffix meant TLS,
+      # served with FTL's own self-signed certificate; nothing used it, because
+      # blocked domains resolve to 0.0.0.0 rather than to this Pi, so no client
+      # ever connected to :443 here for a block page.
+      #
+      # The admin UI is reached as https://pihole.${CADDY_DOMAIN} (via
+      # Caddy) or http://${LAN_IP}:8080/admin (direct, the fallback).
+      FTLCONF_webserver_port: "8080o,[::]:8080o"
+      # ---------------------------------------- encrypted-DNS bootstrap block --
+      # Added 2026-08-26. Stops a device on the LAN from quietly switching to
+      # DoH/DoT and leaving Pi-hole behind.
+      #
+      # ⚠ READ THIS BEFORE ASSUMING IT ENFORCES ANYTHING. This Pi is NOT the
+      # LAN's gateway (check with `ip route`), so it never sees a packet
+      # addressed to 8.8.8.8. The usual advice — an nftables/iptables REDIRECT of
+      # port 53 to Pi-hole — is a NO-OP on this topology: the rule loads, looks
+      # correct, and catches nothing. Enforcement is only possible at the router.
+      # What this does instead is remove the BOOTSTRAP: a client that has to
+      # resolve `dns.google` before it can speak DoH to it never gets an answer.
+      # It stops the opportunistic case (browser/OS auto-upgrade), NOT a
+      # deliberate bypass with a hardcoded resolver IP, which nothing here can.
+      #
+      # `server=/domain/` with no address after it is the dnsmasq idiom for
+      # "answer NXDOMAIN, do not forward". Deliberately NOT a blocklist entry:
+      # gravity answers NOERROR + 0.0.0.0, and some clients read that as a
+      # reachable host worth trying. Domain matching covers subdomains, so
+      # `cloudflare-dns.com` also catches chrome./mozilla./security./family.
+      #
+      # Already handled natively by Pi-hole v6, do not duplicate here:
+      #   use-application-dns.net  -> NXDOMAIN (Firefox's canary; it needs
+      #                               NXDOMAIN specifically, a 0.0.0.0 blocklist
+      #                               answer would NOT disable Firefox DoH)
+      #
+      # ⚠ Do not add `opendns.com` — 208.67.222.222 is our own upstream. Only
+      # the doh.* hostnames are blocked. Blocking a hostname never affects an
+      # upstream configured by IP.
+      #
+      # ⚠ Semicolon-separated and MUST stay one line — see dns_hosts above.
+      # Trade-off accepted 2026-08-26: Chrome's "Secure DNS" toggle stops
+      # working, and iCloud Private Relay / NextDNS stop working, for everyone.
+      # To undo, delete this one key and `docker compose up -d pihole`.
+      FTLCONF_misc_dnsmasq_lines: "server=/dns.google/;server=/cloudflare-dns.com/;server=/one.one.one.one/;server=/dns.quad9.net/;server=/dns9.quad9.net/;server=/dns10.quad9.net/;server=/dns11.quad9.net/;server=/nextdns.io/;server=/doh.opendns.com/;server=/doh.familyshield.opendns.com/;server=/dns.adguard.com/;server=/dns.adguard-dns.com/;server=/doh.cleanbrowsing.org/;server=/dns.controld.com/;server=/mask.icloud.com/;server=/mask-h2.icloud.com/;server=/mask-api.icloud.com/;server=/resolver.arpa/"
+    volumes:
+      - ./appdata/pihole/etc:/etc/pihole
+    cap_add:
+      - NET_ADMIN      # required to bind :53
+      - SYS_TIME
+      - SYS_NICE
+    healthcheck:
+      test: ["CMD", "dig", "+short", "+norecurse", "+retry=0", "@127.0.0.1", "pi.hole"]
+      interval: 30s
+      retries: 3
+
+  # ------------------------------------------------------------------ Plex --
+  # host networking for GDM/DLNA local discovery. Transcoding is a tmpfs so it
+  # never touches the SD card — the Pi 4 can barely transcode anyway, this is
+  # really a direct-play server.
+  plex:
+    <<: *common
+    image: lscr.io/linuxserver/plex:latest@sha256:f6c58cb2f5e41cd1397bf2ed4e61ef63bd86e0736841b3ef426fabfe04606293
+    container_name: plex
+    network_mode: host
+    environment:
+      <<: *env
+      VERSION: docker
+    volumes:
+      - ./appdata/plex:/config
+      - ${DATA_ROOT:-/mnt/rpidata}:${DATA_ROOT:-/mnt/rpidata}:ro
+    tmpfs:
+      - /transcode:size=1g
+    devices:
+      - /dev/dri:/dev/dri   # harmless if absent; remove if the container refuses to start
+    # /identity is the one endpoint Plex answers without a token. start_period is
+    # long because Plex spends minutes on its database after an image change, and
+    # a container marked unhealthy during that window would be restarted by
+    # container-watchdog.sh right when it least needs it.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:32400/identity"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 5m
+
+  # ---------------------------------------------------------- Transmission --
+  # Bridged: it needs no discovery, just its ports. 51413 must be forwarded on
+  # the router for decent peer connectivity (it was already, via the old setup).
+  transmission:
+    <<: *common
+    image: lscr.io/linuxserver/transmission:latest@sha256:7356451f32395838628b241f33bcd7130df9302777fc23f80cbc7ca8b4997c02
+    container_name: transmission
+    ports:
+      - "9091:9091"          # web UI
+      - "51413:51413/tcp"    # peer port
+      - "51413:51413/udp"
+    environment:
+      <<: *env
+      # ⚠ THE IMAGE OWNS `rpc-authentication-required` IN settings.json. Its
+      # init script forces that field to true when both USER and PASS are set
+      # and to false when either is missing, on EVERY start — so editing
+      # settings.json by hand is pointless, it is overwritten seconds later.
+      # These two variables are the only way to turn RPC auth on.
+      # RPC had no authentication at all until 2026-08-25.
+      USER: pi
+      PASS: ${TRANSMISSION_PASSWORD:?set TRANSMISSION_PASSWORD in .env}
+    volumes:
+      - ./appdata/transmission:/config
+      - ${DATA_ROOT:-/mnt/rpidata}:${DATA_ROOT:-/mnt/rpidata}
+    # 200 today because rpc-authentication-required is false. 401 is accepted too
+    # so that turning RPC auth on later does not silently mark this unhealthy —
+    # either answer proves the daemon is serving rather than wedged.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:9091/transmission/web/ | grep -qE '^(200|401)$$'"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 1m
+
+  # ----------------------------------------------------------- Filebrowser --
+  # Browser UI for the data drive: browse folders, drag-and-drop upload from any
+  # machine on the LAN including Windows, no client software.
+  #
+  # This is FileBrowser QUANTUM (gtsteffaniak fork), NOT filebrowser/filebrowser.
+  # The original was archived 2026-09-01 with open advisories and no fixes ever
+  # coming. Quantum is the maintained successor; it is a hard fork, so nothing
+  # about the old install transfers — see README "Filebrowser".
+  #
+  # Bridged, like Transmission — it needs one port, not discovery.
+  #
+  # PIN THE `stable` TAG, NOT `beta`. `beta` is the v2.x line, which moves the
+  # database from bolt to SQLite and renames config keys. Not on this box until
+  # v2 ships stable.
+  #
+  # SCOPE: the WHOLE data drive is mounted at /srv, so the web UI can also reach
+  # DATA_ROOT/backup — i.e. someone logged in here can delete the backups.
+  # That is the cost of "see the whole drive". To narrow it, replace the
+  # /srv line with individual mounts and list them under `server.sources` in
+  # appdata/filebrowser/config.yaml (Quantum supports multiple named sources;
+  # the old filebrowser could only show one root).
+  filebrowser:
+    <<: *common
+    image: gtstef/filebrowser:stable@sha256:e2ac55ccbe53d63b3f1d7d5ea5b82edf589b005a4b747b59912f97c6ba4f969e
+    container_name: filebrowser
+    ports:
+      - "8082:80"
+    # Everything lives in one directory: config.yaml, database.db. Both paths
+    # come from FILEBROWSER_CONFIG / FILEBROWSER_DATABASE, baked into the image.
+    volumes:
+      - ${DATA_ROOT:-/mnt/rpidata}:/srv
+      - ./appdata/filebrowser:/home/filebrowser/data
+    environment:
+      <<: *env
+      # ⚠ THIS IS ENFORCED AT EVERY START, not just the first one. While this
+      # variable is set, filebrowser rewrites the admin password to match it on
+      # each boot and logs "Resetting admin user to default username and
+      # password." So:
+      #     * .env is authoritative — change it there and restart.
+      #     * A password changed in the WEB UI is silently reverted, at the
+      #       latest by the Saturday 05:00 reboot. Do not change it there.
+      # To manage the password from the UI instead, remove this line; the
+      # stored one then persists.
+      FILEBROWSER_ADMIN_PASSWORD: ${FILEBROWSER_PASSWORD:?set FILEBROWSER_PASSWORD in .env}
+    # config.yaml sets createFilePermission 664 / createDirectoryPermission 775,
+    # but Go applies those through the process umask, which is 0022 in this
+    # image — so they would silently land as 644/755 and drop the group write
+    # bit that Samba's create mask 0664 and fix-permissions.sh both assume.
+    # Overriding the entrypoint to set umask 0002 is the only way to set it.
+    # The image is Alpine and has /bin/sh; if a future release goes distroless
+    # this fails LOUDLY at start and quarterly-update.sh rolls back.
+    entrypoint: ["/bin/sh", "-c", "umask 0002; exec ./filebrowser"]
+    # Thumbnail cache. `server.cacheDir` is left at its default `tmp`, relative
+    # to WORKDIR /home/filebrowser — this mount is what that resolves to.
+    # It is a RAM disk on purpose, for three reasons: the SD card benchmarks at
+    # ~19 MB/s and the app warns about it at every start; thumbnails for 514 GB
+    # of media are pure SD write wear; and anything under appdata/ would land in
+    # every nightly backup, which is sized at ~33 MB. Cost: the cache is empty
+    # after a restart, and 256 MB of the 3 GB free RAM is reserved.
+    #
+    # The size cap is the real point: this cache has NO eviction. `cacheDirCleanup`
+    # sounds like one but only wipes the directory at start and shutdown, so on a
+    # persistent path it grows without bound. The app logs "less than the 20 GB
+    # minimum recommended" at start — ignore it, that advice is for people
+    # caching a whole media library. When the tmpfs does fill, a cache write
+    # fails, gets logged as "failed to cache ...", and the preview is still
+    # served — thumbnails just stop being cached. Nothing breaks.
+    tmpfs:
+      - /home/filebrowser/tmp:size=256m,mode=0755,uid=1000,gid=1000
+    # The image ships its own HEALTHCHECK on /health and it would be inherited.
+    # Restated so it is declared in this file rather than inherited, same reason
+    # as Pi-hole's webserver port: container-watchdog.sh depends on a health
+    # status existing, and that dependency should not be invisible here.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:80/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------- Arcane --
+  # Web UI for Docker itself: see and control every container in this stack from
+  # a browser instead of SSH.
+  #
+  # ⚠ THIS CONTAINER IS ROOT ON THE HOST. The Docker socket is not an API with
+  # permissions — anything that can talk to it can start a privileged container
+  # and own the machine. Concretely, whoever logs into Arcane can stop Pi-hole
+  # (taking LAN DNS down for the whole house), read /opt/pi-stack/.env, and
+  # delete the backups. Therefore:
+  #     * NEVER forward 3552 on the router. LAN only.
+  #     * Use a real password. It seeds user `arcane` / `arcane-admin` (the docs
+  #       say admin/admin; they are wrong) and prompts for a change on first login.
+  # Read-only (`:ro`) on the socket would NOT help: the Docker API does
+  # everything over that one socket, so read-only is security theatre here.
+  #
+  # DO NOT use Arcane's image-update feature. Images here are pinned by digest
+  # and updated by quarterly-update.sh, which backs up first, health-gates, and
+  # rolls back. Updating from the UI silently bypasses all three — same reasoning
+  # as the Watchtower note above. Use Arcane to LOOK, and to start/stop/restart.
+  arcane:
+    <<: *common
+    image: ghcr.io/getarcaneapp/manager:latest@sha256:2425b5a3780c32b743d6229c5dd4ec245e9fe42f897e0d0c3f6276eed3873a5d
+    container_name: arcane
+    ports:
+      - "3552:3552"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./appdata/arcane:/app/data
+      # Makes this stack show up on Arcane's "Projects" page. Added 2026-08-26
+      # after the owner expected it to appear there automatically — it does not.
+      # Arcane only lists projects found inside its own `projectsDirectory`
+      # setting (/app/data/projects); it does NOT adopt compose projects from
+      # the `com.docker.compose.project` labels on running containers, which is
+      # why Containers was full while Projects was empty.
+      #
+      # ⚠ :ro IS DELIBERATE AND SHOULD STAY. Read-write would let the compose
+      # file be edited from a browser, and this repo's whole model is that
+      # docker-compose.yml is authoritative in git and rewritten only by
+      # quarterly-update.sh — a web edit would drift silently with no diff to
+      # review. Read-only means Arcane can display and inspect, not rewrite.
+      #
+      # ⚠ This also exposes .env — all six service passwords and the DuckDNS
+      # token — to anyone logged into Arcane. That is not a NEW privilege
+      # boundary (Arcane mounts the Docker socket, so a login there is already
+      # root on this host), but it does turn "root if you know what you are
+      # doing" into "passwords visible on a web page". Accepted knowingly.
+      - /opt/pi-stack:/app/data/projects/pi-stack:ro
+    environment:
+      <<: *env
+      APP_URL: http://${LAN_IP:?set LAN_IP in .env}:3552
+      ENCRYPTION_KEY: ${ARCANE_ENCRYPTION_KEY:?set ARCANE_ENCRYPTION_KEY in .env}
+      JWT_SECRET: ${ARCANE_JWT_SECRET:?set ARCANE_JWT_SECRET in .env}
+    # It runs as PUID 1000, but the socket is root:docker mode 660 — without the
+    # host's docker GID the UI comes up and shows nothing at all. The GID is
+    # host-specific (985 here); provision.sh writes the real one into .env.
+    group_add:
+      - "${DOCKER_GID:-985}"
+    cgroup: host
+    # The image is DISTROLESS — no shell, no wget, no curl, so the usual
+    # curl/wget healthcheck can never pass and would leave this permanently
+    # `unhealthy` for container-watchdog.sh to restart in a loop. The binary
+    # ships its own `health` subcommand; use that.
+    healthcheck:
+      test: ["CMD", "./arcane", "health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ------------------------------------------------------------ Homebridge --
+  # host networking is mandatory for HomeKit: mDNS/Bonjour does not survive
+  # bridge networking. appdata/homebridge holds persist/ + accessories/, which
+  # is the pairing state — lose it and every accessory must be re-added.
+  homebridge:
+    <<: *common
+    # No dated stable tag exists for this repo (only alpha/beta/legacy get them),
+    # so pin by digest. NOTE: the image ships only homebridge-config-ui-x —
+    # Homebridge itself lives in the /homebridge volume, so the restored
+    # package.json governs its version. Upgrade via the UI, deliberately.
+    image: homebridge/homebridge:latest@sha256:e424c8007c522b978d55ed5cf07de99c635e4f72a1dfd893b587dccf76779cb2
+    container_name: homebridge
+    network_mode: host
+    environment:
+      <<: *env
+      HOMEBRIDGE_CONFIG_UI_PORT: 8581
+    volumes:
+      - ./appdata/homebridge:/homebridge
+    # This only proves the UI is up, not that HomeKit accessories are responding
+    # — mDNS/HAP health is not observable from inside the container. It still
+    # catches the failure that actually happens: the Node process wedging.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8581/"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 3m
+
+  # ------------------------------------------------------------- MicroBin --
+  # Pastebin + small-file drop, for moving text between machines on the LAN
+  # without a shared clipboard. Rust, one binary, no external database.
+  #
+  # ⚠ NEVER FORWARD 8083 on the router — same rule as 8082 / 9091 / 3552.
+  microbin:
+    <<: *common
+    image: danielszabo99/microbin:latest@sha256:6660e5ccad0d764fa3c0032464ffb8f4b4f28c92a2eb9e39202b94cdc5b68909
+    container_name: microbin
+    ports:
+      - "8083:8080"
+    # The image declares no USER, so it would run as ROOT, and it is not a
+    # linuxserver image so PUID/PGID do nothing. Pinned explicitly to 1000:1000
+    # so what it writes into appdata matches every other service here and
+    # fix-permissions.sh. appdata/microbin must be chown 1000:1000 or it exits
+    # immediately, unable to create its database.
+    user: "1000:1000"
+    volumes:
+      - ./appdata/microbin:/app/microbin_data
+    environment:
+      <<: *env
+      # HTTP Basic auth. WITHOUT THESE TWO, anyone on the LAN can read and post.
+      #
+      # ⚠ BUT IT DOES NOT COVER READS BY URL. Verified 2026-08-25: `/`,
+      # `/admin` and `/pastalist` return 401 unauthenticated, while
+      # `/upload/<id>` and `/raw/<id>` return 200 with the full content and no
+      # credentials at all. That is deliberate upstream — it is what makes a
+      # paste link shareable — and it cannot be turned off by configuration.
+      # Consequences: anyone on the LAN holding a link can read that paste, so
+      # DO NOT PASTE SECRETS HERE (the .env passwords, the Arcane password).
+      # Enumeration is still blocked: ids are random animal triplets and the
+      # listing page needs the password.
+      MICROBIN_BASIC_AUTH_USERNAME: pi
+      MICROBIN_BASIC_AUTH_PASSWORD: ${MICROBIN_PASSWORD:?set MICROBIN_PASSWORD in .env}
+      # Separate credential for the /admin panel, whose default is the
+      # PUBLISHED admin / m1cr0b1n. Overriding it is not optional.
+      MICROBIN_ADMIN_USERNAME: pi
+      MICROBIN_ADMIN_PASSWORD: ${MICROBIN_PASSWORD:?set MICROBIN_PASSWORD in .env}
+      # Every link the UI hands out is built from this. Leave it unset and
+      # "copy link" produces localhost URLs that are useless on another machine
+      # — which is the entire point of this service.
+      # Must be the PUBLIC name, not an IP. The DuckDNS name
+      # is strictly better here than the raw IP: it resolves from PUBLIC DNS,
+      # so a copied link works even on a device that ignores Pi-hole and has
+      # Google's resolvers hardcoded — which the .internal name never could.
+      MICROBIN_PUBLIC_PATH: https://paste.${CADDY_DOMAIN:?set CADDY_DOMAIN in .env}
+      MICROBIN_PORT: 8080
+      MICROBIN_THREADS: 2          # default is 1; one stuck request blocks all
+      # appdata is on the SD CARD and is tar'd whole into the nightly backup,
+      # so the 2048 MB default cap would let a single upload balloon a 48 MB
+      # snapshot. Use the Samba share for anything large.
+      MICROBIN_MAX_FILE_SIZE_UNENCRYPTED_MB: 64
+      MICROBIN_MAX_FILE_SIZE_ENCRYPTED_MB: 64
+      # No outbound calls. Images are digest-pinned and updated by
+      # quarterly-update.sh, so an update notice is noise at best.
+      MICROBIN_DISABLE_TELEMETRY: "true"
+      MICROBIN_DISABLE_UPDATE_CHECKING: "true"
+    # Debian trixie base, but NO curl and NO wget — the usual healthcheck can
+    # never pass, same trap as Arcane. bash IS present, so use its /dev/tcp
+    # support to speak HTTP directly. 401 counts as healthy: basic auth is on,
+    # so an unauthenticated GET is *supposed* to be refused, and only a dead or
+    # wedged listener fails to answer at all.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080; printf 'GET / HTTP/1.0\\r\\n\\r\\n' >&3; read -r l <&3; case \"$$l\" in *' 200 '*|*' 401 '*) exit 0;; *) exit 1;; esac"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------- starbase80 --
+  # The front door: one page linking to everything on this box, so nobody has
+  # to remember which service lives on which port.
+  #
+  # Reachable as https://home.${CADDY_DOMAIN}/ (via Caddy), and still
+  # as http://${LAN_IP}/ and http://${LOCAL_DNS_NAME}/ — those two now arrive
+  # through Caddy as well, which proxies them here. The `home.internal` name
+  # comes from FTLCONF_dns_hosts on the pihole service above, NOT from here.
+  #
+  # ⚠ NEVER FORWARD 80 or 443 on the router — this page is an index of every
+  # service on this box, including which ones exist and roughly what they are.
+  starbase80:
+    <<: *common
+    image: jordanroher/starbase-80:latest@sha256:6eb898bfa3ad2d38aca9e1e5597b3b1046112deb35c194887942a421fa822991
+    container_name: starbase80
+    ports:
+      # Host 8084 -> container 4173. nginx inside listens on 4173, not 80, so
+      # this mapping is not the redundant-looking pairing it resembles.
+      #
+      # ⚠ MOVED OFF HOST :80 on 2026-08-26 so Caddy could take it. Caddy now
+      # reaches this container as `starbase80:4173` over the compose bridge
+      # network, which does not need a published port at all — 8084 is kept
+      # ONLY as the break-glass route for when Caddy or DuckDNS is broken and
+      # you need the dashboard to find everything else. Same reasoning as the
+      # other services' original ports, which were all kept for that purpose.
+      - "8084:4173"
+    # ⚠ MUST RUN AS ROOT, unlike microbin which is pinned to 1000:1000.
+    # docker-entrypoint.sh runs `sed -i` over /app/index.html and
+    # /app/src/variables.ts and then `npm run build`, all inside root-owned 0644
+    # paths in the image. As uid 1000 every one of those writes fails and the
+    # container dies before nginx starts. It holds no secrets, mounts no host
+    # paths but two read-only ones, and has no socket, so root here buys an
+    # attacker nothing beyond a static file server.
+    volumes:
+      # Read-only is safe despite what the upstream README implies: the
+      # entrypoint only validates and reads this file, it never writes it.
+      # GENERATED by provision.sh from config/starbase80-config.json.tmpl,
+      # which is where the links are actually edited. The template carries
+      # ${LAN_IP} / ${CADDY_DOMAIN} placeholders; this is the rendered result.
+      - ./appdata/starbase80/config.json:/app/src/config/config.json:ro
+      - ./appdata/starbase80/icons:/app/public/icons:ro
+    environment:
+      <<: *env
+      TITLE: ${LOCAL_HOSTNAME:-raspberrypi}
+      LOGO: /icons/raspberry-pi.png
+      THEME: auto
+      # Links open in the same tab. These are LAN tools reached from a bookmark,
+      # not references to read alongside the page — new windows just pile up.
+      NEWWINDOW: "false"
+    # ⚠ It runs a full Vite build (`npm run build`) on EVERY start, in the
+    # foreground, before nginx binds. Measured on this Pi 4: 9.4s from first log
+    # line to nginx. start_period is 60s rather than 15s because that figure is
+    # for a warm, idle box — at boot this competes with Plex's database work and
+    # Pi-hole loading gravity. Marking it unhealthy early hands it to
+    # container-watchdog.sh, which restarts it, which starts another build.
+    # No curl in the image; wget is present.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4173/"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # This limit IS enforced, as of 2026-08-25. It was a silent no-op until then:
+    # the Pi firmware passes `cgroup_disable=memory`, so the kernel's memory
+    # controller was off and Docker discarded every mem_limit without warning
+    # (`docker inspect` showed Memory=0). Fixed by appending
+    # `cgroup_enable=memory cgroup_memory=1` to /boot/firmware/cmdline.txt — see
+    # README §10. Verify at any time with:
+    #   grep -w memory /sys/fs/cgroup/cgroup.controllers
+    #   docker inspect starbase80 --format '{{.HostConfig.Memory}}'   # 1073741824
+    # ⚠ A RESTART DOES NOT APPLY IT — the limit is fixed when the container is
+    # CREATED. After changing this value use `docker compose up -d
+    # --force-recreate starbase80`, or it keeps the old (or absent) limit.
+    mem_limit: 1g
+
+  # -------------------------------------------------------------- Dozzle --
+  # Live container logs in a browser, so "what did Pi-hole say when it broke" is
+  # not an SSH session. Read-only view; it cannot start, stop or change anything.
+  #
+  # ⚠ THE SOCKET IS MOUNTED :ro AND HERE THAT IS ACTUALLY MEANINGFUL, unlike
+  # Arcane above. Dozzle only ever issues GETs (list containers, stream logs),
+  # so a read-only socket removes the write verbs it never uses. It is NOT a
+  # security boundary — the Docker API's read side alone exposes every
+  # container's environment, which on this box includes every password in .env.
+  # Treat a Dozzle login as equivalent to reading .env. LAN only, never forwarded.
+  #
+  # AUTH IS ON, and it is not optional here: container logs routinely contain
+  # tokens, paths and error messages that should not be readable by anyone who
+  # reaches the port. DOZZLE_AUTH_PROVIDER=simple reads appdata/dozzle/users.yml,
+  # which holds a BCRYPT HASH, not the password — so changing DOZZLE_PASSWORD in
+  # .env alone does nothing. Regenerate users.yml too; the command is in .env.
+  dozzle:
+    <<: *common
+    image: amir20/dozzle:latest@sha256:068025ea622a1ce3e343a138dd9a962429b5187a133aca301bb4991fe7d2b708
+    container_name: dozzle
+    ports:
+      # Break-glass route only, same reasoning as starbase80's 8084 — the normal
+      # way in is https://logs.${CADDY_DOMAIN} via Caddy.
+      - "8085:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./appdata/dozzle:/data
+    environment:
+      <<: *env
+      DOZZLE_AUTH_PROVIDER: simple
+      DOZZLE_ENABLE_ACTIONS: "false"   # no start/stop/restart from the UI; Arcane owns that
+      DOZZLE_NO_ANALYTICS: "true"
+    # Distroless — no shell, no curl, no wget. The binary ships its own
+    # healthcheck subcommand; same trap as Arcane, same shape of fix.
+    healthcheck:
+      test: ["CMD", "/dozzle", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    mem_limit: 256m
+
+  # ---------------------------------------------------------------- Diun --
+  # Docker Image Update Notifier. Watches the TAG each image was pinned from and
+  # reports when that tag now resolves to a digest different from the pin here.
+  #
+  # ⚠ THIS IS THE DELIBERATE ALTERNATIVE TO WATCHTOWER, not a step towards it.
+  # Diun only ever REPORTS. Nothing here pulls, recreates or restarts anything —
+  # that stays with quarterly-update.sh, which backs up first, health-gates and
+  # rolls back. See the header of this file for why that distinction matters.
+  #
+  # ⚠ NO NOTIFIER IS CONFIGURED, so findings go to the container log ONLY, which
+  # means you must actually go and look (Dozzle above, or `docker logs diun`).
+  # That is a deliberate placeholder, not an oversight: every transport Diun
+  # supports (ntfy, Telegram, Discord, Gotify, SMTP) either needs an account
+  # elsewhere or publishes this box's image inventory to a third party, which is
+  # the owner's call and not a default worth assuming. To add one later it is a
+  # single env var, e.g. DIUN_NOTIF_NTFY_ENDPOINT / _TOPIC. See ROADMAP.md.
+  diun:
+    <<: *common
+    image: crazymax/diun:latest@sha256:e324b793eb32dfb7f74d3a39421ebf090141caaadee69b8f78da63112408ee25
+    container_name: diun
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./appdata/diun:/data
+    environment:
+      <<: *env
+      # 06:00 daily. Deliberately not more often: tags here move weekly at most,
+      # and every check is a registry round-trip per image.
+      DIUN_WATCH_SCHEDULE: "0 6 * * *"
+      DIUN_WATCH_FIRSTCHECKNOTIF: "false"   # or the first run reports all 12 images at once
+      DIUN_PROVIDERS_DOCKER: "true"
+      DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT: "true"
+      DIUN_DB_PATH: /data/diun.db
+      LOG_LEVEL: info
+    # No web UI and no health endpoint of any kind — it is a scheduler that
+    # sleeps between runs. `diun --version` at least proves the binary is not
+    # wedged, which is all container-watchdog.sh needs from it.
+    healthcheck:
+      test: ["CMD", "diun", "--version"]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    mem_limit: 256m
+
+  # -------------------------------------------------------------- Beszel --
+  # Lightweight metrics WITH HISTORY: CPU, memory, disk, network and per-
+  # container stats over time. Chosen over Prometheus + Grafana deliberately —
+  # that pair is a ~700 MB answer to a 50 MB question on a 4 GB Pi.
+  #
+  # Two parts: this containerised hub stores history and draws charts; the
+  # collector is a native systemd service so it can use host smartctl for HDD
+  # history. Its pinned version lives in beszel-agent-version. See OPERATIONS
+  # §7.8. The two are updated together by quarterly-update.sh.
+  beszel:
+    <<: *common
+    image: henrygd/beszel:0.18.8@sha256:4c51486968efa0b0a702c1b0967966a2e06fb250b7418f3072d2488faea27c51
+    container_name: beszel
+    ports:
+      - "8086:8090"          # break-glass; normal route is metrics.<domain>
+    volumes:
+      - ./appdata/beszel:/beszel_data
+    environment:
+      <<: *env
+    # Distroless, like Dozzle and Arcane. The binary answers /api/health.
+    healthcheck:
+      test: ["CMD", "/beszel", "health", "--url", "http://localhost:8090"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    mem_limit: 256m
+
+  # -------------------------------------------------------------- Caddy --
+  # Reverse proxy and TLS terminator. Gives every web UI on this box a real
+  # Let's Encrypt certificate and a name, on a LAN-only Pi behind CGNAT.
+  # Routing lives in ./Caddyfile; read that file first, it carries the design.
+  #
+  # ⚠ THE ONLY SERVICE HERE THAT IS BUILT RATHER THAN PULLED. The official
+  # caddy image ships no DNS provider modules and Caddy compiles plugins in, so
+  # DNS-01 against DuckDNS needs our own binary. See caddy/Dockerfile.
+  # Consequences, both handled but easy to trip over:
+  #   * `docker compose up -d` alone will NOT pick up a Caddyfile-unrelated
+  #     change to caddy/Dockerfile — it uses the cached image. Use
+  #     `docker compose up -d --build caddy`.
+  #   * It has no digest to pin, so it is absent from CHANNELS in
+  #     quarterly-update.sh. That script handles it separately: it bumps
+  #     CADDY_VERSION below and rebuilds, under the same backup/health/rollback
+  #     gate as everything else.
+  caddy:
+    <<: *common
+    build:
+      context: ./caddy
+      args:
+        # ⚠ THE SINGLE PLACE THE CADDY VERSION IS SET. The Dockerfile uses it
+        # for BOTH the builder and the runtime stage, which must match or
+        # xcaddy links the plugin against a different Caddy than the one that
+        # runs it. quarterly-update.sh rewrites this line.
+        CADDY_VERSION: 2.11.4
+    image: pi-stack/caddy:2.11.4
+    container_name: caddy
+    # ⚠ The one service Diun must NOT watch. `pi-stack/caddy` is built locally
+    # by the `build:` block above and exists on no registry, so Diun's daily
+    # manifest lookup resolves it to docker.io/pi-stack/caddy and gets "access
+    # to the resource is denied" — a guaranteed daily failure that would train
+    # everyone to ignore Diun's output. Caddy's upstream version is tracked by
+    # CADDY_VERSION above and bumped by quarterly-update.sh instead.
+    labels:
+      diun.enable: "false"
+    ports:
+      - "80:80"
+      - "443:443"
+      # HTTP/3. Harmless if no client uses it; browsers on the LAN will.
+      - "443:443/udp"
+    environment:
+      <<: *env
+      # Consumed by Caddyfile as {$CADDY_DOMAIN} at parse time, so it appears
+      # in the host matchers. Changing the domain is this one .env value plus
+      # the DuckDNS account itself.
+      CADDY_DOMAIN: ${CADDY_DOMAIN:?set CADDY_DOMAIN in .env}
+      # Consumed by the Caddyfile's plain-HTTP fallback site block, which keeps
+      # http://<ip>/, http://<local-name>/ and http://<host>.local/ working.
+      LAN_IP: ${LAN_IP:?set LAN_IP in .env}
+      LOCAL_DNS_NAME: ${LOCAL_DNS_NAME:-home.internal}
+      LOCAL_HOSTNAME: ${LOCAL_HOSTNAME:-raspberrypi}
+      # ⚠ READ AT RUNTIME as {env.DUCKDNS_TOKEN}, deliberately, rather than
+      # substituted into the config at parse time — so the token does not show
+      # up in `caddy adapt` output or in the admin API's config dump.
+      # This is the DuckDNS API token from duckdns.org (GitHub login). It can
+      # edit DNS for this subdomain and nothing else.
+      DUCKDNS_TOKEN: ${DUCKDNS_TOKEN:?set DUCKDNS_TOKEN in .env}
+    # ⚠ REQUIRED, and not obvious: Pi-hole and Homebridge both run with
+    # network_mode: host, so they are NOT on this bridge network and cannot be
+    # reached by container name. This maps host.docker.internal to the bridge
+    # gateway (172.18.0.1) so the Caddyfile can proxy to them. Without it those
+    # two names fail to resolve and only those two services 502.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # ⚠ CADDY MUST NOT DEPEND ON PI-HOLE FOR ITS OWN DNS. This bit during the
+    # 2026-08-26 cutover: compose recreated pihole and caddy in the same second,
+    # Caddy tried to reach Let's Encrypt, and Docker's embedded resolver
+    # forwarded to the host — i.e. to Pi-hole, which was mid-restart. Result:
+    # "server misbehaving", ACME failed, and Caddy fell back to the staging CA
+    # before eventually recovering. The same race exists at every boot and every
+    # `docker compose up`.
+    #
+    # depends_on would be the obvious fix and is the WRONG one: Caddy also
+    # PROXIES Pi-hole's admin UI, so making it wait on Pi-hole means a sick
+    # Pi-hole takes the dashboard (and every other name) down with it. Giving
+    # Caddy its own upstream resolvers removes the dependency entirely instead.
+    #
+    # Container names still resolve: on a user-defined bridge network Docker
+    # keeps 127.0.0.11 as the container's resolver and only forwards EXTERNAL
+    # queries here, so `starbase80:4173` and friends are unaffected.
+    dns:
+      - 1.1.1.1
+      - 9.9.9.9
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # ⚠ /data HOLDS THE CERTIFICATES AND THE ACME ACCOUNT KEY. Losing it is
+      # not fatal — Caddy just re-issues — but it does mean a fresh set of
+      # Let's Encrypt orders, and LE's rate limit is 5 failed validations per
+      # hour per account. It sits under appdata/, so backup-appdata.sh already
+      # includes it in the nightly `core` snapshot. Keep it that way.
+      - ./appdata/caddy/data:/data
+      - ./appdata/caddy/config:/config
+    # Hits Caddy's own admin API, which listens on 127.0.0.1:2019 INSIDE the
+    # container namespace and is not reachable from the LAN. This proves the
+    # process is alive and holding a config, which is what container-watchdog.sh
+    # needs to know. It deliberately does NOT test a proxied backend: a 502 from
+    # a sick Filebrowser is not a reason to restart the proxy in front of it.
+    # ⚠ `admin off` in the Caddyfile would break this healthcheck silently.
+    # caddy:alpine has busybox wget, no curl.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      # Long, because a FIRST start has to complete a full DNS-01 exchange —
+      # write the TXT record, wait out propagation_delay, poll public resolvers,
+      # then wait for Let's Encrypt. Two minutes is normal; the Caddyfile allows
+      # up to 5 for propagation alone. Marking it unhealthy mid-issuance would
+      # hand it to container-watchdog.sh, which would restart it and start the
+      # whole exchange again — straight into the rate limit.
+      start_period: 6m
+    mem_limit: 256m

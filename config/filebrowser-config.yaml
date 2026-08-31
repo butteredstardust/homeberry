@@ -1,0 +1,93 @@
+# FileBrowser Quantum config — deployed to appdata/filebrowser/config.yaml.
+#
+# Schema is v1.5.x (`stable`). The v2 `beta` line renames keys and moves HTTP
+# settings out of `server:`; do not mix them.
+#
+# Read at every start. Most of it can also be changed in the UI, but UI changes
+# live in database.db and are NOT in git — keep the durable decisions here.
+#
+# Full annotated reference for the pinned version:
+#   https://github.com/gtsteffaniak/filebrowser/blob/v1.5.3-stable/backend/config.yaml
+
+server:
+  port: 80                       # container-internal; the host mapping is 8082
+  baseURL: "/"
+
+  # Pi 4B, 4 cores, shared with Pi-hole which answers DNS for the whole house.
+  # Default is 4. Thumbnailing a folder of 1080p rips will otherwise take the
+  # box to load 4+ and make DNS lookups visibly slow.
+  numImageProcessors: 2
+
+  logging:
+    - levels: "info|warning|error"
+
+  # The whole data drive, as one source. /mnt/rpidata is bind-mounted at /srv.
+  # NOTE this includes /srv/backup — anyone who logs in can delete the appdata
+  # backups. Narrow it by mounting individual directories in docker-compose.yml
+  # and listing them here as separate sources.
+  sources:
+    - path: "/srv"
+      name: "RPIDATA"
+
+  # Match fix-permissions.sh and Samba: files 0664, dirs 2775 (setgid, so group
+  # pi is inherited). Go applies these through the umask, which is why
+  # docker-compose.yml overrides the entrypoint with `umask 0002` — without that
+  # they silently become 0644/0755 and the group write bit is lost.
+  # Verified 2026-08-25: uploads land 1000:1000 0664, new dirs drwxrwsr-x.
+  filesystem:
+    createFilePermission: "664"
+    createDirectoryPermission: "2775"
+
+  # cacheDir is deliberately LEFT AT THE DEFAULT (`tmp`, inside the container's
+  # own layer) rather than pointed into appdata. Thumbnails for 514 GB of media
+  # would otherwise land in every nightly backup, which is sized at ~33 MB.
+  # Cost: thumbnails regenerate after the container is recreated.
+
+auth:
+  # Deliberately `pi`, matching every other service on this box (Samba,
+  # Transmission, Homebridge, Arcane). Changing this does NOT rename the
+  # existing account — filebrowser seeds a NEW admin and leaves the old one in
+  # database.db with its old password still valid. After changing it, delete
+  # appdata/filebrowser/database.db and restart so only one account exists.
+  adminUsername: "pi"
+  # adminPassword deliberately NOT set here — it comes from
+  # FILEBROWSER_ADMIN_PASSWORD, which docker-compose.yml feeds from .env, so the
+  # secret stays out of git. It is re-applied at EVERY start, so .env wins over
+  # anything set in the UI. See the note in docker-compose.yml.
+  methods:
+    password:
+      enabled: true
+      minLength: 5
+      signup: false              # LAN-only box, one account, no self-service
+    passkey:
+      enabled: false
+
+userDefaults:
+  # Applies to NEW users. The seeded admin gets full admin permissions
+  # regardless of what is set here.
+  account:
+    permissions:
+      admin: false
+      api: false
+      modify: false
+      share: false
+      delete: false
+      create: false
+      download: true
+
+  preview:
+    image: true
+    video: true
+    audio: true
+    office: true
+    models: false                # 3D model previews: nothing here needs them
+    motionVideoPreview: false     # hover-scrub decodes several frames per card
+    highQuality: false            # ARM CPU, LAN clients — not worth the cycles
+
+  ui:
+    darkMode: true
+    locale: "en"
+
+  listing:
+    deleteWithoutConfirming: false
+    showHidden: false

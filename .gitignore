@@ -1,0 +1,19 @@
+# Secrets and credentials — never commit
+.env
+tailscale-apikey.txt
+*apikey*
+*.key
+*.pem
+
+# Mutable state, restored from backup rather than version control
+appdata/
+*.tar.gz
+../pi-backups/
+
+# Rendered from templates by provision.sh
+config/starbase80-config.json
+mac/com.example.pi-backup-pull.plist
+
+# Rollback copies written by quarterly-update.sh
+*.prev
+*.prev.*

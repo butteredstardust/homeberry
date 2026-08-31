@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  TEMPLATE — replace __HOME__ and __REPO__ before installing. launchd does NOT
+  expand ~ or $HOME inside a plist, which is why these are absolute paths and
+  why this file cannot simply be copied as-is.
+
+  Pulls the Pi's nightly core appdata snapshot to the local machine.
+
+  Install:
+      sed -e "s|__HOME__|$HOME|g" -e "s|__REPO__|$(cd .. && pwd)|g" \
+        com.example.pi-backup-pull.plist.tmpl \
+        > ~/Library/LaunchAgents/com.example.pi-backup-pull.plist
+      launchctl load ~/Library/LaunchAgents/com.example.pi-backup-pull.plist
+
+  Check it:
+      launchctl list | grep pi-backup-pull
+      tail -20 ~/Library/Logs/pi-backup-pull.log
+
+  06:30 is chosen to sit after the Pi's 03:30 core backup and after its 05:00
+  Saturday reboot, so the file is complete and the Pi is up by the time we ask.
+  launchd runs a missed StartCalendarInterval job once at the next wake, so a
+  Mac that was asleep at 06:30 still gets the copy.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.pi-backup-pull</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/mac/pull-backups.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>6</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/pi-backup-pull.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/pi-backup-pull.log</string>
+
+    <!-- Low priority: this is 33 MB over the LAN, it can wait behind anything
+         you are actually doing. -->
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>

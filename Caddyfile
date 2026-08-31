@@ -1,0 +1,206 @@
+# Caddyfile — TLS termination and names for every web UI on this box.
+#
+# Result: https://<service>.{$CADDY_DOMAIN}, with a real Let's Encrypt
+# certificate that every browser trusts, on a LAN-only box behind CGNAT.
+#
+# HOW THAT IS POSSIBLE, since none of this is reachable from the internet:
+#   * DOMAIN and *.DOMAIN are PUBLIC DNS records that resolve to the Pi's
+#     LAN address — a private address. Public name,
+#     private destination. Nothing outside the house can use it; DNS is just a
+#     directory, publishing a name costs nothing and exposes nothing.
+#   * The certificate is issued over DNS-01, which proves control of the NAME by
+#     writing a TXT record, not control of a reachable HTTP server. So Let's
+#     Encrypt never connects to this Pi. See caddy/Dockerfile for why HTTP-01
+#     can never work here.
+#
+# ONE CERTIFICATE, ONE CHALLENGE — this is the load-bearing design decision.
+# Every service is a `handle` inside the single `*.DOMAIN` block below rather
+# than its own site block, because DuckDNS stores exactly ONE TXT record per
+# account. Split these into seven site blocks and Caddy orders seven separate
+# certificates, whose DNS-01 challenges each overwrite the previous one's TXT
+# record — they fail, retry, and can burn through Let's Encrypt's rate limit
+# (5 failed validations per hour). One wildcard name = one TXT write = no race.
+# The apex is deliberately NOT in this certificate for the same reason.
+#
+# ⚠ NOTHING HERE SHOULD EVER BE PORT-FORWARDED ON THE ROUTER. Valid TLS does
+# not make Arcane (root on the host via the Docker socket), Pi-hole (DNS for the
+# whole house) or the dashboard (an index of every service here) safe to expose.
+# The point of this file is trusted certificates on the LAN, not remote access.
+# Under CGNAT a forward would not work anyway — do not treat that as the reason.
+{
+	# No ACME account email, at the owner's choice (2026-08-26). Consequence:
+	# Let's Encrypt has no way to warn about a certificate that has stopped
+	# renewing, so disk-guard.sh checks the expiry locally instead and trips
+	# `systemctl --failed`, which is this box's entire alerting system.
+	# To turn LE's own warnings back on, add:  email you@example.com
+	#
+	# The admin API is left at its default (127.0.0.1:2019, inside the
+	# container's own namespace — not reachable from the LAN). It is what the
+	# healthcheck below uses, and what `docker exec caddy caddy reload` needs.
+	# Do not add `admin off` without changing both.
+}
+
+# Applied to the wildcard site. Split out only so the reasoning has somewhere to
+# live without burying the routing table underneath it.
+(duckdns_tls) {
+	tls {
+		dns duckdns {env.DUCKDNS_TOKEN}
+
+		# ⚠ THIS LINE IS NOT OPTIONAL ON THIS PARTICULAR BOX.
+		# After writing the TXT record, Caddy polls DNS to confirm it has
+		# propagated. Left alone it would use the container's resolver, which
+		# is Docker's, which forwards to the host, which is PI-HOLE — running
+		# on this same Pi. Pi-hole will have already cached the OLD (empty)
+		# TXT answer, and serves that cached negative for its full TTL. Caddy
+		# then waits for a record it has already set, times out, and issuance
+		# fails in a way that looks like DuckDNS being broken. Asking public
+		# resolvers directly sidesteps our own cache.
+		resolvers 1.1.1.1 9.9.9.9
+
+		# VERIFIED 2026-08-26, because the opposite would be catastrophic and
+		# silent: a DuckDNS /update call WITHOUT an `ip=` parameter sets the A
+		# record to the CALLER's address. If the plugin's TXT writes did that,
+		# every renewal would repoint the domain at this house's
+		# public CGNAT address (which also rotates) and every
+		# name here would break at once, roughly every 60 days, for no visible
+		# reason. Tested by hand with a canary TXT: the A record stayed
+		# on the LAN address. A txt-only update does NOT touch the A record.
+		#
+		# Corollary: never run the stock DuckDNS updater cron on this network.
+		# It has no ip= either, and it WOULD do exactly that damage.
+
+		# DuckDNS applies TXT updates in seconds, but the propagation check is
+		# the difference between "renewed quietly at 3am" and "failed once an
+		# hour for a week", so it is worth being patient here.
+		propagation_delay 30s
+		propagation_timeout 5m
+	}
+}
+
+# Shared proxy hygiene. Caddy already sets X-Forwarded-For / -Proto / -Host and
+# passes the original Host through, which is all any of these apps need — but
+# WebSocket upgrades (Homebridge's log stream, Arcane's live container view)
+# only survive because Caddy proxies hop-by-hop headers correctly by default.
+# Do not "helpfully" add header_up rules; they are what break it.
+
+# ============================================================ HTTPS services ==
+*.{$CADDY_DOMAIN} {
+	import duckdns_tls
+
+	# ------------------------------------------------------------ dashboard --
+	@home host home.{$CADDY_DOMAIN}
+	handle @home {
+		reverse_proxy starbase80:4173
+	}
+
+	# -------------------------------------------------------------- Pi-hole --
+	# host.docker.internal, not a container name: Pi-hole runs with
+	# network_mode: host (it must own :53 on the LAN address), so it is not on
+	# the compose bridge network and has no DNS name there. The
+	# extra_hosts/host-gateway entry in docker-compose.yml is what makes this
+	# resolve to the bridge gateway (172.18.0.1). The nftables ruleset accepts
+	# it because 172.16/12 is RFC1918, which is already allowed wholesale.
+	@pihole host pihole.{$CADDY_DOMAIN}
+	handle @pihole {
+		# Pi-hole v6 serves nothing useful at /, so save everyone the click.
+		redir / /admin/ 302
+		reverse_proxy host.docker.internal:8080
+	}
+
+	# ---------------------------------------------------------- Filebrowser --
+	@files host files.{$CADDY_DOMAIN}
+	handle @files {
+		reverse_proxy filebrowser:80
+	}
+
+	# ------------------------------------------------------------- MicroBin --
+	# ⚠ HTTPS CHANGES NOTHING ABOUT MICROBIN'S EXPOSURE. /upload/<id> and
+	# /raw/<id> still return 200 with full content and no credentials — that is
+	# upstream behaviour and is not configurable. Encrypting the transport does
+	# not add an authorisation check. Still do not paste secrets here.
+	@paste host paste.{$CADDY_DOMAIN}
+	handle @paste {
+		reverse_proxy microbin:8080
+	}
+
+	# --------------------------------------------------------- Transmission --
+	# Works unmodified because BOTH of Transmission's whitelists are off
+	# (verified 2026-08-26: rpc-host-whitelist-enabled false,
+	# rpc-whitelist-enabled false), so neither the rewritten Host nor the
+	# proxy's 172.18.x source address is rejected. If either is ever turned
+	# back on, this breaks with "403: Unrecognized Host header" or "403:
+	# Unauthorized IP Address" — the fix is `header_up Host localhost` and
+	# adding 172.18.* to rpc-whitelist, NOT disabling the RPC password.
+	@torrents host torrents.{$CADDY_DOMAIN}
+	handle @torrents {
+		redir / /transmission/web/ 302
+		reverse_proxy transmission:9091
+	}
+
+	# --------------------------------------------------------------- Arcane --
+	# ⚠ This one mounts the Docker socket and is therefore root on the host:
+	# whoever logs in can stop Pi-hole and take DNS down for the house, read
+	# .env, or delete the backups. It is on the LAN only, and stays that way.
+	@docker host docker.{$CADDY_DOMAIN}
+	handle @docker {
+		reverse_proxy arcane:3552
+	}
+
+	# ----------------------------------------------------------- Homebridge --
+	# host networking again, for the same reason as Pi-hole: mDNS/Bonjour does
+	# not survive bridge networking, and HomeKit is entirely mDNS.
+	@homebridge host homebridge.{$CADDY_DOMAIN}
+	handle @homebridge {
+		reverse_proxy host.docker.internal:8581
+	}
+
+	# --------------------------------------------------------------- Dozzle --
+	# ⚠ Container logs contain more than they look like they do — environment
+	# dumps, tokens in error messages, file paths. Dozzle has its own login
+	# (simple auth, appdata/dozzle/users.yml); do not remove it, and never
+	# forward 8085. Treat a Dozzle session as equivalent to reading .env.
+	@logs host logs.{$CADDY_DOMAIN}
+	handle @logs {
+		reverse_proxy dozzle:8080
+	}
+
+	# --------------------------------------------------------------- Beszel --
+	# The hub only. The agent talks to it over the compose network / host, not
+	# through Caddy, so there is nothing to proxy for it here.
+	@metrics host metrics.{$CADDY_DOMAIN}
+	handle @metrics {
+		reverse_proxy beszel:8090
+	}
+
+	# Anything else under the wildcard — a typo, or a service that was removed.
+	# An explicit answer beats a confusing default page.
+	handle {
+		respond "No service by that name on this Pi. Try https://home.{$CADDY_DOMAIN}" 404
+	}
+}
+
+# =============================================================== HTTP names ===
+# Caddy owns :80 now, so the pre-existing ways into the dashboard have to keep
+# working or every bookmark in the house breaks at once. These three names
+# cannot have certificates — a private IP and the reserved .internal / .local
+# TLDs are not things any public CA will ever sign — so they stay plain HTTP,
+# and are the fallback if TLS or DuckDNS is ever broken.
+# ⚠ {$VAR} is Caddy's own PARSE-TIME environment substitution, not shell
+# syntax. These three names come from LAN_IP / LOCAL_DNS_NAME / LOCAL_HOSTNAME,
+# which docker-compose.yml passes into this container from .env.
+http://{$LAN_IP}, http://{$LOCAL_DNS_NAME}, http://{$LOCAL_HOSTNAME}.local {
+	reverse_proxy starbase80:4173
+}
+
+# The apex is not in the wildcard certificate (see the header), so it is served
+# over HTTP only and just points at the dashboard.
+http://{$CADDY_DOMAIN} {
+	redir https://home.{$CADDY_DOMAIN}{uri} permanent
+}
+
+# Every other http:// name under the domain redirects to itself over HTTPS.
+# Caddy would normally generate these redirects automatically, but it does not
+# do so for a wildcard site, so it is spelled out.
+http://*.{$CADDY_DOMAIN} {
+	redir https://{host}{uri} permanent
+}

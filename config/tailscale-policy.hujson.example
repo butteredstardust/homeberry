@@ -1,0 +1,146 @@
+// Tailnet policy file — EXAMPLE. Replace every placeholder before use.
+//
+// This file is PASTED into the Tailscale admin console (or applied with
+// `POST /api/v2/tailnet/-/acl`, content-type application/hujson, which keeps
+// comments). Nothing deploys it, so the console and this file drift silently —
+// re-paste after every edit.
+//
+// Placeholders to replace:
+//   100.64.0.1  -> your Pi's tailnet address    (tailscale ip -4)
+//   100.64.0.2  -> your workstation's address
+//   100.64.0.3  -> a client device, used only in the tests block
+//   192.0.2.x   -> your LAN addresses (RFC 5737 documentation range)
+//   example.duckdns.org -> your CADDY_DOMAIN
+// Paste into https://login.tailscale.com/admin/acls/file — this repo copy is the
+// source of truth, but the console is what actually enforces it. They drift silently.
+//
+// Design in one line: your workstation and the Pi are the admin tier and stay
+// UNTAGGED; every device added afterwards gets a tag and only the ports it needs.
+//
+// ⚠ NEVER TAG THE WORKSTATION OR THE PI. Untagged IS the admin tier — every
+// admin grant below has autogroup:member as its SOURCE, so tagging the
+// workstation instantly costs it the Pi, the LAN and every other device. Tags
+// exist to demote new devices below those two, never to classify them.
+//
+// Why port limits cost nothing here: Caddy fronts every admin UI on :443
+// (pihole/files/paste/torrents/docker/logs/metrics/homebridge.example.duckdns.org).
+// A phone needs 443 and nothing else. The raw 8080-8086/3552/9091 ports are
+// break-glass only, and break-glass belongs to the workstation.
+{
+	"tagOwners": {
+		"tag:mobile":  ["autogroup:admin"], // iPhone, iPad
+		"tag:desktop": ["autogroup:admin"], // Windows box
+	},
+
+	"hosts": {
+		// The Pi is reachable two ways and BOTH must be listed on every rule, or
+		// the rule is trivially bypassed. See the ⚠ in OPERATIONS.md §7.7.
+		"pi-ts":  "100.64.0.1",     // tailnet address
+		"pi-lan": "192.0.2.10/32",   // same box, via the subnet route
+		"lan":    "192.0.2.0/24",    // everything else behind the subnet router
+	},
+
+	"grants": [
+		// ── Admin tier ────────────────────────────────────────────────────────
+		// Untagged devices = your workstation and the Pi. Full access to the Pi and the
+		// whole LAN behind it. This is the tier that can SSH and hit raw ports.
+		{
+			"src": ["autogroup:member"],
+			"dst": ["pi-ts", "pi-lan", "lan"],
+			"ip":  ["*"],
+		},
+		// Untagged devices can reach each other (workstation <-> Pi, and any future
+		// untagged node). Without this, adding a second admin machine silently
+		// cannot talk to the first.
+		{
+			"src": ["autogroup:member"],
+			"dst": ["autogroup:member"],
+			"ip":  ["*"],
+		},
+		// Admin tier -> tagged client devices. ONE DIRECTION ONLY: this restores
+		// Taildrop, ping and screen sharing from the workstation to phones/tablets.
+		// It does NOT let those devices reach the workstation — a tagged device is owned
+		// by the tag, so it stops matching autogroup:member the moment it is
+		// tagged, and without this rule it vanishes from the workstation's netmap
+		// entirely. Added 2026-08-27 after the iPad joined.
+		{
+			"src": ["autogroup:member"],
+			"dst": ["tag:mobile", "tag:desktop"],
+			"ip":  ["*"],
+		},
+
+		// ── Phones and tablets (tag:mobile) ───────────────────────────────────
+		// Deliberately NOT granted: the LAN, SSH, and every raw admin port.
+		{
+			"src": ["tag:mobile"],
+			"dst": ["pi-ts", "pi-lan"],
+			"ip": [
+				"udp:53", "tcp:53",    // Pi-hole — required, tailnet DNS points here
+				"tcp:80",              // Caddy redirect to https
+				"tcp:443", "udp:443",  // Caddy: every service UI (udp = HTTP/3)
+				"tcp:32400",           // Plex, deliberately unproxied
+				"tcp:445",             // Samba (iOS Files app)
+				"icmp:*",              // ping, for diagnosing "is it me or the tunnel"
+			],
+		},
+
+		// ── Windows (tag:desktop) ─────────────────────────────────────────────
+		// Same as mobile plus NetBIOS, because Windows Explorer still probes 139
+		// when mapping a share by name. No LAN, no SSH, no raw admin ports.
+		{
+			"src": ["tag:desktop"],
+			"dst": ["pi-ts", "pi-lan"],
+			"ip": [
+				"udp:53", "tcp:53",
+				"tcp:80",
+				"tcp:443", "udp:443",
+				"tcp:32400",
+				"tcp:445", "tcp:139",
+				"icmp:*",
+			],
+		},
+	],
+
+	// Route approval is otherwise a console-only click that survives no rebuild,
+	// and an unapproved route is silently ignored with no error anywhere.
+	"autoApprovers": {
+		"routes": {
+			"192.0.2.0/24": ["autogroup:admin"],
+		},
+	},
+
+	// Saved policy is rejected if any of these fail. They encode the two things
+	// most likely to be broken by a careless edit: mobile keeping DNS+HTTPS, and
+	// mobile NOT gaining SSH or a path to the rest of the LAN.
+	"tests": [
+		{
+			"src": "tag:mobile",
+			"accept": [
+				"100.64.0.1:443",
+				"100.64.0.1:53",
+				"100.64.0.1:32400",
+				"192.0.2.10:443",
+			],
+			"deny": [
+				"100.64.0.1:22",    // no SSH from a phone
+				"100.64.0.1:8080",  // no raw Pi-hole admin
+				"100.64.0.1:3552",  // no raw Arcane (= root on the host)
+				"192.0.2.10:22",     // and not via the subnet route either
+				"192.0.2.1:80",      // no router admin
+				"192.0.2.50:445",    // no lateral movement to other LAN devices
+			],
+		},
+		{
+			"src": "tag:desktop",
+			"accept": ["100.64.0.1:445", "100.64.0.1:443"],
+			"deny": ["100.64.0.1:22", "192.0.2.1:80", "100.64.0.1:9091"],
+		},
+		// The admin -> client grant must stay ONE-directional. If a careless edit
+		// ever makes it symmetric, this test fails and the save is rejected.
+		{
+			"src": "tag:mobile",
+			"accept": ["100.64.0.1:443"],
+			"deny": ["100.64.0.2:22", "100.64.0.2:5900"], // the workstation
+		},
+	],
+}
