@@ -53,7 +53,7 @@ never the value.
 | Transmission | `torrents.` | `:9091` | `pi` | `.env` → `TRANSMISSION_PASSWORD` |
 | Homebridge | `homebridge.` | `:8581` | `pi` | PBKDF2 in `appdata/homebridge/auth.json`, **not** in `.env` |
 | Filebrowser | `files.` | `:8082` | `pi` | `.env` → `FILEBROWSER_PASSWORD` |
-| Arcane | `docker.` | `:3552` | `pi` | **exception** — 12+ chars, mixed case, digit and symbol, or Arcane refuses it · `.env` → `ARCANE_PASSWORD` |
+| Arcane | `docker.` | `:3552` | `arcane` | **exception** — 12+ chars, mixed case, digit and symbol, or Arcane refuses it · `.env` → `ARCANE_PASSWORD` |
 | MicroBin | `paste.` | `:8083` | `pi` | `.env` → `MICROBIN_PASSWORD` |
 | Samba | n/a — not HTTP | `smb://<LAN_IP>/<share>` | `pi` | `.env` → `SAMBA_PASSWORD` |
 | SSH | n/a | `:22` | `pi` | key only, password auth disabled |
@@ -1296,7 +1296,10 @@ curl -s -X POST -u "$(cat tailscale-apikey.txt):" -H "Content-Type: application/
   -d '{"name":"iphone"}' https://api.tailscale.com/api/v2/device/<id>/name
 ```
 
-Done 2026-08-27: `ipad171` → `ipad`, `iphone183` → `iphone`.
+Tailscale derives the machine name from the device's own hostname, so phones
+and tablets join under whatever iOS invented that week. Rename them once, here,
+so the ACL
+rules keep matching after the OS changes its mind about the hostname.
 
 ⚠ **iOS and iPadOS cannot sign.** Signing is a CLI operation, so those devices
 must be signed *from* the Mac or the Pi. Plan accordingly if you are away from
@@ -1374,8 +1377,8 @@ route -n get <CLIENT_TAILNET_IP>   # interface MUST be utun*, not en0
 Tailnet addresses are `100.64.0.0/10`, the **same CGNAT range the ISP uses**
 (§7.7, and the reason the firewall matches by interface name). If a tailnet IP is
 not in the routing table — which is exactly what happens when the ACL denies you
-that peer — macOS sends the packet out `en0` to the default gateway, and *Digi's
-CGNAT infrastructure answers it*. Measured 2026-08-27: a denied iPad "replied" in
+that peer — macOS sends the packet out `en0` to the default gateway, and *the
+ISP's CGNAT infrastructure answers it*. Measured on one such link: a denied iPad "replied" in
 **15 ms with 0% loss**. Over the real tunnel it was 100% loss; once permitted, it
 was 260 ms. **The fast, healthy-looking reply was the false one.**
 
@@ -1395,7 +1398,7 @@ the native agent is **~42 MB RSS**, on a box with 2.7 Gi available.
 
 | Service | Answers | URL | Port | Auth |
 |---|---|---|---|---|
-| Dozzle | live + historical container logs | `https://logs.${CADDY_DOMAIN}` | 8085 | simple auth, `pi` / see `.env` |
+| Dozzle | live + historical container logs | `https://logs.${CADDY_DOMAIN}` | 8085 | simple auth, `admin` / see `.env` → `DOZZLE_PASSWORD` |
 | Diun | "is a newer image published?" | none — log output only | none | n/a |
 | Beszel | CPU/mem/disk/net history + charts | `https://metrics.${CADDY_DOMAIN}` | 8086 | own account, created at first run |
 
@@ -1650,7 +1653,7 @@ Refused, with reasons:
 
 - **The ISP uses CGNAT — there is no inbound connectivity, and this is not
   fixable here.** Traceroute puts the router's WAN side on RFC1918
-  (`hop 2 = 10.0.37.243`) while the world sees a different address; the router's
+  (`hop 2` is a `10.x.x.x` address) while the world sees a different one; the router's
   UPnP `GetExternalIPAddress` returns empty. A port forward only opens the last
   hop. No global IPv6 either. Two consequences: Transmission's peer port cannot be
   opened (**not** caused by containerising — 51413/tcp+udp are published and

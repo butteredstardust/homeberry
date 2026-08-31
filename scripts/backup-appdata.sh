@@ -8,10 +8,12 @@
 #     backup-appdata.sh core    nightly 03:30, keeps 7 (~70 MB each)
 #     backup-appdata.sh full    weekly  Sat 03:00, keeps 1 (~2.4 GB each)
 #
-# WHY TWO TIERS: a full snapshot is 2.4 GB and 2.4 GB of that is Plex's
-# Metadata/ directory — downloaded posters and artwork. The HDD had 18 GB free
-# when this was written, so 7 nightly fulls (16.8 GB) would have filled the
-# drive inside a week and taken Plex and Transmission down with it.
+# WHY TWO TIERS: a full snapshot is ~2.4 GB and almost all of that is Plex's
+# Metadata/ directory — downloaded posters and artwork. On a media drive with a
+# double-digit GB of headroom, 7 nightly fulls would fill it inside a week and
+# take Plex and Transmission down with it. Check your own free space against
+# these figures; they scale with the size of your Plex library, not with this
+# script.
 #
 # What `core` deliberately drops, and what it costs you:
 #   Plex Metadata/  — artwork only. Plex re-downloads it from the library DB

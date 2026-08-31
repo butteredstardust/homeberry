@@ -58,8 +58,10 @@ here, because the official image ships no DNS provider modules, so its pin is th
 
 - Raspberry Pi 4B, 4 GB. **64-bit Raspberry Pi OS Lite**, Debian 12 or 13.
   `provision.sh` refuses to continue on a non-arm64 userland.
-- A USB disk for media, formatted **ext4**. The stack runs fine without it
-  (`nofail`), just with empty media.
+- A USB disk for media, formatted **ext4**. **Required at build time** —
+  `provision.sh drive` exits if it is not mounted, because every path below it
+  depends on it. It is mounted `nofail`, so the Pi still boots and keeps serving
+  DNS if the disk dies later; that is a different situation from not having one.
 - The SD card holds `appdata/`, including Plex's SQLite DB. That is the main
   wear source and the reason the nightly backup is load-bearing. A USB SSD is
   the better answer if you have one.
@@ -119,14 +121,17 @@ cp .env.example .env && chmod 600 .env
 | `LOCAL_HOSTNAME` | `raspberrypi` | Also sets the mDNS name `<hostname>.local` |
 | `LOCAL_DNS_NAME` | `home.internal` | Short local A record served by Pi-hole |
 | `TZ` | `Etc/UTC` | From `timedatectl list-timezones` |
-| `DATA_DEV` | `/dev/sda1` | ⚠ **Verify with `lsblk`.** `fsck-datadrive.sh` acts on this |
+| `DATA_DEV` | `/dev/sda1` | ⚠ **Verify with `lsblk`.** Used to derive `DATA_DRIVE_UUID` and to build `/etc/fstab` |
 | `DATA_DRIVE_UUID` | *blank* | Leave blank — `provision.sh` detects it, asks you to confirm, and writes it back |
 | `DATA_ROOT` | `/mnt/rpidata` | Bind-mounted at the same path inside containers. Fix it before first run or not at all |
 | `MEDIA_SUBFOLDERS` | `music,torrent-complete,…` | Folders `fix-permissions.sh` takes ownership of |
 | `TAILSCALE_AUTHKEY` | *blank* | **Optional.** Blank = stay LAN-only. Tailscale and its host settings are installed either way |
 | `DOCKER_GID` | `985` | `provision.sh` derives the real one with `getent group docker` and rewrites this |
 
-**Secrets** — all `changeme` in `.env.example`, all required:
+**Secrets** — all `changeme` in `.env.example`. Required before the first run,
+with three exceptions called out in the table: `TAILSCALE_AUTHKEY` is optional,
+`ARCANE_PASSWORD` is record-only (nothing reads it), and the two `BESZEL_*`
+values cannot exist until the hub has been claimed after first boot.
 
 | Key | How to set it |
 |---|---|
@@ -141,7 +146,7 @@ cp .env.example .env && chmod 600 .env
 | `ARCANE_ENCRYPTION_KEY` | `openssl rand -hex 32`. Never rotate to fix a login — it decrypts stored registry credentials |
 | `ARCANE_JWT_SECRET` | `openssl rand -hex 32` |
 | `DUCKDNS_TOKEN` | from duckdns.org. Can edit DNS for your subdomain and nothing else |
-| `BESZEL_KEY` / `BESZEL_TOKEN` | issued by Beszel's *Metrics → Add System*. The key is public; the token is not |
+| `BESZEL_KEY` / `BESZEL_TOKEN` | issued by Beszel's *Metrics → Add System*, which only exists **after** the stack is up. Leave them as-is for the first run; the `beszelagent` phase skips and tells you to re-run it. The key is public; the token is not |
 
 ```bash
 # generate the two Arcane secrets straight into .env
@@ -233,7 +238,9 @@ The `drive` phase stops and asks you to confirm the disk before it writes
    run `sudo bash provision.sh beszelagent` — the credentials are issued by the
    hub, so they cannot exist before this.
 2. **Change the first-run credentials**: Homebridge (`admin`/`admin`), Arcane
-   (`arcane`/`arcane-admin`). Record them in `.env`.
+   (`arcane`/`arcane-admin`). Neither can be seeded from `.env` — Homebridge
+   stores a PBKDF2 hash in `appdata/homebridge/auth.json` and has no key at all,
+   and `ARCANE_PASSWORD` is only somewhere to write down what you chose.
 3. **Approve the subnet route and paste the ACL policy** in the Tailscale admin
    console, if you joined a tailnet. Neither is settable from the host.
 4. **Disable Transmission's UPnP begging.** The file does not exist until it has

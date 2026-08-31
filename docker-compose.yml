@@ -248,10 +248,10 @@ services:
     # Thumbnail cache. `server.cacheDir` is left at its default `tmp`, relative
     # to WORKDIR /home/filebrowser — this mount is what that resolves to.
     # It is a RAM disk on purpose, for three reasons: the SD card benchmarks at
-    # ~19 MB/s and the app warns about it at every start; thumbnails for 514 GB
-    # of media are pure SD write wear; and anything under appdata/ would land in
-    # every nightly backup, which is sized at ~33 MB. Cost: the cache is empty
-    # after a restart, and 256 MB of the 3 GB free RAM is reserved.
+    # ~19 MB/s and the app warns about it at every start; thumbnails for a
+    # multi-hundred-GB library are pure SD write wear; and anything under
+    # appdata/ would land in every nightly backup, which is sized in tens of MB.
+    # Cost: the cache is empty after a restart, and 256 MB of RAM is reserved.
     #
     # The size cap is the real point: this cache has NO eviction. `cacheDirCleanup`
     # sounds like one but only wipes the directory at start and shutdown, so on a

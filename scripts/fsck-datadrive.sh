@@ -10,9 +10,9 @@
 # so nothing ever checks it on its own. This is the deliberate replacement for
 # that, on a schedule you control rather than at a surprise boot.
 #
-# WHY IT MAY REPAIR: the owner authorised automatic fixing (2026-08-23) after
-# being told the risk — a repair pass can move corrupted files to lost+found,
-# and there is no full backup of the 635 GB on this drive. The escalation below
+# WHY IT MAY REPAIR: this repairs automatically, which is a deliberate trade.
+# A repair pass can move corrupted files to lost+found, and a media drive this
+# size is typically not backed up in full anywhere. The escalation below
 # is the conservative version of that instruction: preen first, which only makes
 # changes that are unambiguously safe, and escalate to `-y` only for the
 # specific exit code that means "found something preen will not touch".
@@ -155,7 +155,8 @@ fi
 
 # Two independent confirmations. If either still sees it mounted, stop.
 # This is the check that stands between a routine maintenance job and a
-# destroyed 635 GB filesystem, so it is worth being repetitive about.
+# destroyed filesystem holding every byte of media you own, so it is worth
+# being repetitive about.
 if mountpoint -q "$MNT" || findmnt -rn --source "$DEV" >/dev/null 2>&1; then
   warn "$DEV still appears mounted after umount reported success. Aborting."
   exit 1

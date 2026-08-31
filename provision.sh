@@ -129,7 +129,10 @@ if run base; then
 
   wait_for_apt
   apt-get update
-  apt_install apparmor ca-certificates curl git jq rsync sqlite3 unattended-upgrades vim
+  # ethtool: needed by the Tailscale UDP GRO unit. The Lite image does not ship
+  # it, and the unit's leading `-` would swallow the failure silently.
+  apt_install apparmor ca-certificates curl ethtool git jq rsync sqlite3 \
+              unattended-upgrades vim
 
   # Security patches, applied unattended. This is the sane replacement for the
   # old weekly `rpi-update -y` cron: stable archive only, no firmware roulette.
@@ -532,11 +535,20 @@ EOF
   printf '%s\n%s\n' "$SAMBA_PASSWORD" "$SAMBA_PASSWORD" | smbpasswd -s -a pi
   systemctl enable --now smbd nmbd
   systemctl restart smbd nmbd
-  if systemctl is-active --quiet tailscaled; then
-    tailscale serve --bg --tcp=445 tcp://127.0.0.1:445
-    tailscale serve --bg --tcp=139 tcp://127.0.0.1:139
+  # `systemctl is-active` is NOT the right test: the tailscale phase starts
+  # tailscaled unconditionally, so with a blank TAILSCALE_AUTHKEY the daemon is
+  # running but logged out, and `tailscale serve` fails with "not logged in".
+  # Under `set -e` that would abort stage 1 on the documented LAN-only path.
+  # `tailscale status` is the check that actually means "authenticated", and
+  # Serve failures are non-fatal regardless — LAN SMB works either way.
+  if tailscale status >/dev/null 2>&1; then
+    tailscale serve --bg --tcp=445 tcp://127.0.0.1:445 || \
+      warn "  tailscale serve 445 failed — SMB stays LAN-only"
+    tailscale serve --bg --tcp=139 tcp://127.0.0.1:139 || \
+      warn "  tailscale serve 139 failed — SMB stays LAN-only"
   else
-    warn "tailscaled is inactive — SMB is LAN-only until Tailscale Serve is configured"
+    warn "  Tailscale is not logged in — SMB is LAN-only. After joining a"
+    warn "  tailnet, re-run: sudo bash provision.sh samba"
   fi
   say "Share available at smb://${LAN_IP}/${DATA_SHARE_NAME}"
 fi
@@ -713,11 +725,28 @@ if run adlists; then
   _adlists="$STACK/config/pihole-adlists.txt"
   _gravity=/etc/pihole/gravity.db
 
+  # A fresh pihole container creates and migrates gravity.db on first boot, and
+  # on a Pi 4 that can outlast the `stack` phase's settle time. Testing for the
+  # file once would race it: the import would be skipped and the repository's
+  # declarative lists would never be applied. Wait for the DB to exist AND be
+  # queryable, which is only true after the migration has committed.
+  _gravity_ready() {
+    docker exec pihole test -f "$_gravity" 2>/dev/null &&
+    docker exec pihole pihole-FTL sqlite3 "$_gravity" \
+      'SELECT count(*) FROM adlist;' >/dev/null 2>&1
+  }
+  if [[ -r "$_adlists" ]]; then
+    say "  waiting for pihole to finish initialising gravity.db (up to 3 min)"
+    for _i in $(seq 1 36); do _gravity_ready && break; sleep 5; done
+  fi
+
   if [[ ! -r "$_adlists" ]]; then
     warn "$_adlists not found — skipping"
-  elif ! docker exec pihole test -f "$_gravity" 2>/dev/null; then
-    warn "pihole container is not running, or gravity.db does not exist yet."
-    warn "  Start the stack first, then: sudo bash provision.sh adlists"
+    ADLISTS_FAILED=1
+  elif ! _gravity_ready; then
+    warn "pihole is not running, or gravity.db is still not queryable after 3 min."
+    warn "  Check 'docker compose logs pihole', then: sudo bash provision.sh adlists"
+    ADLISTS_FAILED=1
   else
     _added=0 _seen=0
     while IFS= read -r _line || [[ -n "$_line" ]]; do
@@ -729,10 +758,11 @@ if run adlists; then
         warn "  skipping non-URL line: $_line"; continue; }
       _seen=$((_seen + 1))
 
-      # INSERT OR IGNORE, keyed on the UNIQUE address column: re-running never
-      # resurrects a list you disabled by hand, and never overwrites the comment
-      # explaining why. Single-quotes are doubled to keep a quote in a URL or
-      # comment from terminating the literal.
+      # INSERT OR IGNORE against the UNIQUE(address, type) constraint (every
+      # row here is type 0, a denylist): re-running never resurrects a list you
+      # disabled by hand, and never overwrites the comment explaining why.
+      # Single-quotes are doubled to keep a quote in a URL or comment from
+      # terminating the literal.
       _q_url="${_url//\'/\'\'}"; _q_comment="${_comment//\'/\'\'}"
       if docker exec pihole pihole-FTL sqlite3 "$_gravity" \
            "INSERT OR IGNORE INTO adlist (address, enabled, comment)
@@ -740,6 +770,7 @@ if run adlists; then
         _added=$((_added + 1))
       else
         warn "  failed to import: $_url"
+        ADLISTS_FAILED=1
       fi
     done < "$_adlists"
 
@@ -756,6 +787,7 @@ if run adlists; then
     else
       warn "  gravity rebuild FAILED. The adlists are recorded but not compiled."
       warn "  Retry with: docker exec pihole pihole -g"
+      ADLISTS_FAILED=1
     fi
   fi
 fi
@@ -1247,30 +1279,63 @@ fi
 if run dnscutover; then
   say "Pointing this host at its own Pi-hole"
 
-  if ! docker exec pihole dig +short +time=2 +tries=1 @127.0.0.1 pi.hole >/dev/null 2>&1; then
-    warn "Pi-hole is not answering queries — NOT changing this host's resolver."
-    warn "  Fix Pi-hole first, then: sudo bash provision.sh dnscutover"
-  else
-    if command -v nmcli >/dev/null; then
-      _con="$(nmcli -t -g NAME connection show --active 2>/dev/null | head -1)"
-      if [[ -n "$_con" ]]; then
-        nmcli con mod "$_con" ipv4.ignore-auto-dns yes ipv4.dns "127.0.0.1" 2>/dev/null \
-          && nmcli con up "$_con" >/dev/null 2>&1 \
-          && say "  host resolver set to 127.0.0.1 on '$_con'" \
-          || warn "  nmcli could not set the resolver — do it by hand."
-      else
-        warn "  No active NetworkManager connection found — set the resolver by hand."
-      fi
-    else
-      warn "  nmcli not present. Set nameserver 127.0.0.1 by whatever manages"
-      warn "  /etc/resolv.conf on this image, or the host keeps using the router."
-    fi
+  # `dig` EXITS ZERO on NXDOMAIN and SERVFAIL — a bare `dig >/dev/null` proves
+  # only that a DNS server replied something, not that it resolved anything.
+  # Every check below therefore requires a NON-EMPTY answer.
+  _pihole_answers() {
+    [[ -n "$(docker exec pihole dig +short +time=2 +tries=1 @127.0.0.1 \
+             deb.debian.org A 2>/dev/null)" ]]
+  }
+  # The host's own resolution path, whatever manages resolv.conf.
+  _host_resolves() { getent hosts deb.debian.org >/dev/null 2>&1; }
 
-    if getent hosts pi.hole >/dev/null 2>&1 || dig +short +time=2 pi.hole >/dev/null 2>&1; then
-      say "  host resolution still works"
+  if ! _pihole_answers; then
+    warn "Pi-hole is not resolving queries — NOT changing this host's resolver."
+    warn "  Fix Pi-hole first, then: sudo bash provision.sh dnscutover"
+  elif ! command -v nmcli >/dev/null; then
+    warn "  nmcli not present. Set nameserver 127.0.0.1 by whatever manages"
+    warn "  /etc/resolv.conf on this image, or the host keeps using the router."
+  else
+    # The FIRST active connection is not necessarily the one carrying the
+    # default route (tailscale0, docker0 and any VPN are active too). Resolve
+    # the default-route device and match on that.
+    _dev="$(ip -o route get 1.1.1.1 2>/dev/null | grep -o 'dev [^ ]*' | awk '{print $2}')"
+    _con="$(nmcli -t -g DEVICE,NAME connection show --active 2>/dev/null \
+            | awk -F: -v d="$_dev" '$1 == d {print $2; exit}')"
+
+    if [[ -z "$_con" ]]; then
+      warn "  No NetworkManager connection owns the default route ($_dev)."
+      warn "  Set the resolver by hand; not touching anything."
     else
-      warn "  This host can no longer resolve names. Revert with:"
-      warn "    sudo nmcli con mod '<connection>' ipv4.ignore-auto-dns no ipv4.dns ''"
+      # Capture the CURRENT settings so a failed cutover can be undone without
+      # the operator having to know what they were.
+      _prev_dns="$(nmcli -g ipv4.dns con show "$_con" 2>/dev/null || true)"
+      _prev_ign="$(nmcli -g ipv4.ignore-auto-dns con show "$_con" 2>/dev/null || echo no)"
+      say "  '$_con' ($_dev): saving ipv4.dns='$_prev_dns' ignore-auto-dns='$_prev_ign'"
+
+      if nmcli con mod "$_con" ipv4.ignore-auto-dns yes ipv4.dns "127.0.0.1" 2>/dev/null \
+         && nmcli con up "$_con" >/dev/null 2>&1; then
+        sleep 2
+        if _host_resolves; then
+          say "  host resolver set to 127.0.0.1 on '$_con'; resolution verified"
+        else
+          warn "  Resolution BROKE after the cutover — rolling back automatically."
+          nmcli con mod "$_con" ipv4.ignore-auto-dns "$_prev_ign" \
+                                ipv4.dns "$_prev_dns" 2>/dev/null || true
+          nmcli con up "$_con" >/dev/null 2>&1 || true
+          sleep 2
+          if _host_resolves; then
+            warn "  Rolled back. The host resolves again via its previous settings."
+            warn "  Investigate Pi-hole, then re-run: sudo bash provision.sh dnscutover"
+          else
+            warn "  ROLLBACK ALSO FAILED. Restore by hand:"
+            warn "    sudo nmcli con mod '$_con' ipv4.ignore-auto-dns $_prev_ign ipv4.dns '$_prev_dns'"
+            warn "    sudo nmcli con up '$_con'"
+          fi
+        fi
+      else
+        warn "  nmcli could not apply the change — nothing was altered."
+      fi
     fi
   fi
 
@@ -1373,3 +1438,18 @@ cat <<EOF
   command and nowhere else.
 ================================================================
 EOF
+
+# Phases that only warn would otherwise be buried under several screens of
+# output and a "Provisioning complete" that reads like success.
+if [[ -n "${ADLISTS_FAILED:-}" ]]; then
+  warn ""
+  warn "UNFINISHED: the Pi-hole adlists were not fully applied. Pi-hole is"
+  warn "  resolving but blocking little or nothing. Re-run once the stack is up:"
+  warn "      sudo bash provision.sh adlists"
+fi
+if [[ -n "${BESZEL_SKIPPED:-}" ]]; then
+  warn ""
+  warn "UNFINISHED: the Beszel agent is not installed — the hub had not issued"
+  warn "  credentials yet. Claim the hub, add this system, put BESZEL_KEY and"
+  warn "  BESZEL_TOKEN in .env, then: sudo bash provision.sh beszelagent"
+fi
