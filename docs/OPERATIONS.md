@@ -441,6 +441,18 @@ lives in `appdata/arcane/arcane.db`, so it survives container recreation and is
 included in the normal appdata backups. The `services` stage runs this phase;
 on an older deployment, run it once explicitly.
 
+The phase waits up to three minutes for Arcane to seed that database, because on
+a first provision the file appears before the table and the table before the row.
+If it is still unreadable it warns in the end-of-run summary and leaves polling
+on rather than aborting the remaining phases — duplicate registry lookups are
+wasteful, not dangerous. Re-run `sudo bash provision.sh arcane` once the stack is
+healthy and confirm with:
+
+```bash
+sudo sqlite3 /opt/pi-stack/appdata/arcane/arcane.db \
+  "SELECT value FROM settings WHERE key='pollingEnabled';"   # expect: false
+```
+
 ⚠ **None of these changed the first sentence of this section: nothing notifies
 you.** They are dashboards — they report only when someone opens them. Beszel can
 alert but has not been configured to, and Diun's notifiers are deliberately off

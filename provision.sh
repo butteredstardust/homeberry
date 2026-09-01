@@ -834,22 +834,43 @@ fi
 if run arcane; then
   say "Disabling duplicate Arcane image polling (Diun remains authoritative)"
   _arcane_db="$STACK/appdata/arcane/arcane.db"
-  if [[ ! -f "$_arcane_db" ]]; then
-    warn "Arcane database is not present yet. Run the stack phase, then re-run:"
-    warn "  sudo bash provision.sh arcane"
-    exit 1
+
+  # Arcane creates arcane.db and seeds its settings table on first boot, and on
+  # a Pi that can outlast the `stack` phase's settle time. Testing for the file
+  # once would race the seed twice over: the file appears before the table, and
+  # the table before the row. Wait for the row that is actually to be updated,
+  # or a first provision reports "schema may have changed" for a database that
+  # was merely still being written.
+  _arcane_ready() {
+    [[ -f "$_arcane_db" ]] &&
+    [[ "$(sqlite3 "$_arcane_db" \
+        "SELECT count(*) FROM settings WHERE key='pollingEnabled';" 2>/dev/null)" == 1 ]]
+  }
+  if ! _arcane_ready; then
+    say "  waiting for Arcane to initialise its settings database (up to 3 min)"
+    for _i in $(seq 1 36); do _arcane_ready && break; sleep 5; done
   fi
-  _arcane_rows="$(sqlite3 "$_arcane_db" \
-    "UPDATE settings SET value='false', updatedAt=CURRENT_TIMESTAMP WHERE key='pollingEnabled'; SELECT changes();")"
-  if [[ "$_arcane_rows" != 1 ]] \
-     || [[ "$(sqlite3 "$_arcane_db" "SELECT value FROM settings WHERE key='pollingEnabled';")" != false ]]; then
-    warn "Arcane pollingEnabled was not updated; its settings schema may have changed."
-    exit 1
+
+  # Polling is a duplicate-work optimisation, not a security control, so an
+  # unreachable database defers to the end-of-run summary rather than aborting
+  # provisioning and taking every later phase with it.
+  if ! _arcane_ready; then
+    warn "Arcane's settings database is still not queryable after 3 min."
+    ARCANE_FAILED=1
+  else
+    _arcane_rows="$(sqlite3 "$_arcane_db" \
+      "UPDATE settings SET value='false', updatedAt=CURRENT_TIMESTAMP WHERE key='pollingEnabled'; SELECT changes();")"
+    if [[ "$_arcane_rows" != 1 ]] \
+       || [[ "$(sqlite3 "$_arcane_db" "SELECT value FROM settings WHERE key='pollingEnabled';")" != false ]]; then
+      warn "Arcane pollingEnabled was not updated; its settings schema may have changed."
+      ARCANE_FAILED=1
+    else
+      if [[ "$(docker inspect -f '{{.State.Running}}' arcane 2>/dev/null || true)" == true ]]; then
+        docker compose -f "$STACK/docker-compose.yml" restart arcane >/dev/null
+      fi
+      say "Arcane automatic image polling disabled; manual checks remain available"
+    fi
   fi
-  if [[ "$(docker inspect -f '{{.State.Running}}' arcane 2>/dev/null || true)" == true ]]; then
-    docker compose -f "$STACK/docker-compose.yml" restart arcane >/dev/null
-  fi
-  say "Arcane automatic image polling disabled; manual checks remain available"
 fi
 
 # =============================================================== ADLISTS =====
@@ -1594,6 +1615,12 @@ if [[ -n "${ADLISTS_FAILED:-}" ]]; then
   warn "UNFINISHED: the Pi-hole adlists were not fully applied. Pi-hole is"
   warn "  resolving but blocking little or nothing. Re-run once the stack is up:"
   warn "      sudo bash provision.sh adlists"
+fi
+if [[ -n "${ARCANE_FAILED:-}" ]]; then
+  warn ""
+  warn "UNFINISHED: Arcane's hourly image polling is still on, duplicating Diun's"
+  warn "  registry lookups. Nothing is broken by it. Re-run once the stack is up:"
+  warn "      sudo bash provision.sh arcane"
 fi
 if [[ -n "${BESZEL_SKIPPED:-}" ]]; then
   warn ""
