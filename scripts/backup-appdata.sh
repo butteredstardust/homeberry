@@ -24,6 +24,11 @@
 #
 set -euo pipefail
 
+# The archive includes .env (all service credentials), and appdata already
+# contains authentication databases and private keys. Never create a
+# group/world-readable backup, regardless of the caller's inherited umask.
+umask 0077
+
 STACK="${STACK:-/opt/pi-stack}"
 
 # --- site configuration ------------------------------------------------------
@@ -163,7 +168,7 @@ done
 
 if ! tar -czf "$ARCHIVE" "${EXCLUDES[@]}" \
     --transform='s,^sqlite-appdata,appdata,' \
-    -C "$STACK" appdata -C "$SQLITE_STAGE" sqlite-appdata; then
+    -C "$STACK" appdata .env -C "$SQLITE_STAGE" sqlite-appdata; then
   rm -f -- "$ARCHIVE"
   echo "tar failed; removed incomplete archive." >&2
   exit 1

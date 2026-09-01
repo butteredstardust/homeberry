@@ -48,6 +48,10 @@ require_dir 'appdata/homebridge/persist'
 require_file 'appdata/transmission/settings.json'
 require_file 'appdata/pihole/etc/pihole.toml'
 require_file 'appdata/beszel-agent/fingerprint'
+require_file '.env'
+
+[[ "$(stat -c '%a' "$RESTORE_DIR/.env")" == 600 ]] \
+  || { echo "Wrong .env mode after restore (expected 600)" >&2; exit 1; }
 
 [[ "$(stat -c '%U:%G' "$RESTORE_DIR/appdata/beszel-agent")" == "beszel:beszel" ]] \
   || { echo "Wrong Beszel agent ownership after restore" >&2; exit 1; }

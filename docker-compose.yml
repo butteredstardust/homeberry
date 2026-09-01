@@ -54,11 +54,17 @@ services:
       # that is why the dashboard's Plex and Samba links stay raw IPs, not names.
       #
       # ⚠ Semicolon-separated, like dns_upstreams above; Pi-hole v6 splits array
-      # env vars on `;`. A comma silently produces ONE malformed record.
+      # env vars on `;`. A comma silently produces ONE malformed record. Keep the
+      # machine-specific PIHOLE_EXTRA_HOSTS inventory in the untracked `.env`.
       # ⚠ Pi-hole owns pihole.toml and rewrites it. Declare records HERE, not by
       # editing that file or via the web UI, or the next container recreate
       # discards them.
-      FTLCONF_dns_hosts: "${LAN_IP:?set LAN_IP in .env} ${LOCAL_DNS_NAME:-home.internal}"
+      FTLCONF_dns_hosts: "${LAN_IP:?set LAN_IP in .env} ${LOCAL_DNS_NAME:-home.internal};${PIHOLE_EXTRA_HOSTS:-}"
+      # Conditional forwarding is deliberately OFF. The router does not serve
+      # useful local names, so forwarding reverse lookups to it only creates a
+      # retry/error loop. An EMPTY STRING is load-bearing here: Pi-hole v6 maps
+      # it to []; the literal string "[]" does not clear a persisted value.
+      FTLCONF_dns_revServers: ""
       # The old box served the UI on 8080 (not 80), and the Teleporter import
       # restores that setting. Pinned here so it is declared rather than
       # inherited from whatever archive was last imported.
@@ -485,6 +491,10 @@ services:
     environment:
       <<: *env
       HOMEBRIDGE_CONFIG_UI_PORT: 8581
+      # The host already runs Avahi. Homebridge uses bonjour-hap directly, so
+      # starting a second Avahi daemon in this host-networked container only
+      # creates a duplicate mDNS stack and warning; it is not needed for HAP.
+      ENABLE_AVAHI: "0"
     volumes:
       - ./appdata/homebridge:/homebridge
     # This only proves the UI is up, not that HomeKit accessories are responding
@@ -785,6 +795,14 @@ services:
         CADDY_VERSION: 2.11.4
     image: pi-stack/caddy:2.11.4
     container_name: caddy
+    # A fixed address on a dedicated bridge is the identity used by the host
+    # firewall below. Caddy keeps the default network for container backends
+    # and internet access; this small bridge exists only for its two host-mode
+    # admin backends (Pi-hole and Homebridge).
+    networks:
+      default:
+      caddy_host:
+        ipv4_address: ${CADDY_HOST_IP:-172.22.0.2}
     # ⚠ The one service Diun must NOT watch. `pi-stack/caddy` is built locally
     # by the `build:` block above and exists on no registry, so Diun's daily
     # manifest lookup resolves it to docker.io/pi-stack/caddy and gets "access
@@ -830,10 +848,11 @@ services:
     # ⚠ REQUIRED, and not obvious: Pi-hole and Homebridge both run with
     # network_mode: host, so they are NOT on this bridge network and cannot be
     # reached by container name. This maps host.docker.internal to the bridge
-    # gateway (172.18.0.1) so the Caddyfile can proxy to them. Without it those
-    # two names fail to resolve and only those two services 502.
+    # dedicated bridge gateway (172.22.0.1) so the Caddyfile can proxy to them.
+    # This is deliberately fixed rather than `host-gateway`: the nftables rule
+    # can then admit exactly Caddy, not every container in RFC1918 space.
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:${CADDY_HOST_GATEWAY:-172.22.0.1}"
     # ⚠ CADDY MUST NOT DEPEND ON PI-HOLE FOR ITS OWN DNS. This bit during the
     # 2026-08-26 cutover: compose recreated pihole and caddy in the same second,
     # Caddy tried to reach Let's Encrypt, and Docker's embedded resolver
@@ -888,6 +907,14 @@ services:
 # bypassing their proxy by addressing the read-write proxy directly.
 networks:
   default:
+  # Fixed, deliberately tiny control path from Caddy to host-networked admin
+  # services. Keep these addresses in sync with config/nftables.conf.
+  caddy_host:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${CADDY_HOST_SUBNET:-172.22.0.0/29}
+          gateway: ${CADDY_HOST_GATEWAY:-172.22.0.1}
   socketproxy_ro:
     internal: true
   socketproxy_rw:

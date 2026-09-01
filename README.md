@@ -212,6 +212,8 @@ cp .env.example .env && chmod 600 .env
 | `LAN_SUBNET` | `192.168.0.0/24` | Used by the Tailscale subnet route and the disk guard |
 | `LOCAL_HOSTNAME` | `raspberrypi` | Also sets the mDNS name `<hostname>.local` |
 | `LOCAL_DNS_NAME` | `home.internal` | Short local A record served by Pi-hole |
+| `PIHOLE_EXTRA_HOSTS` | *blank* | Semicolon-separated A/PTR records for DHCP-reserved devices; keep the real inventory only in `.env` |
+| `CADDY_HOST_SUBNET`, `CADDY_HOST_GATEWAY`, `CADDY_HOST_IP` | `172.22.0.0/29`, `.1`, `.2` | Dedicated Caddy-to-host path; `provision.sh stack` validates the set and rejects Docker-network overlap |
 | `TZ` | `Etc/UTC` | From `timedatectl list-timezones` |
 | `DATA_DEV` | `/dev/sda1` | ⚠ **Verify with `lsblk`.** Used to derive `DATA_DRIVE_UUID` and to build `/etc/fstab` |
 | `DATA_DRIVE_UUID` | *blank* | Leave blank — `provision.sh` detects it, asks you to confirm, and writes it back |
@@ -351,7 +353,7 @@ can never get through CGNAT.
 
 ```
 host      base drive perms docker native firewall tailscale samba dns
-services  stack adlists backup maintenance quarterly watchdog heal
+services  stack arcane adlists backup maintenance quarterly watchdog heal
           beszelagent diskguard fsck dnscutover
 ```
 
@@ -444,6 +446,10 @@ wrong for any other threat model:
   create a container can create one with `/` mounted. Set `SOCKET_PROXY_POST=0`
   to make Arcane read-only if you only want the dashboard. Give it your
   strongest password either way.
+- **Diun is the automatic image-update monitor.** Arcane's hourly image polling
+  is disabled in its persistent settings to avoid duplicate registry lookups;
+  Arcane's manual check remains available. Digest changes still go through the
+  backed-up, health-gated quarterly updater.
 - **MicroBin's `/upload/<id>` and `/raw/<id>` return full paste content with no
   credentials.** Only `/`, `/admin` and `/pastalist` are behind basic auth. That
   is upstream behaviour and is what makes links shareable. **Never paste secrets

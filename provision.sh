@@ -26,7 +26,7 @@
 # Individual phases are idempotent and can be re-run alone at any time:
 #
 #   stage `host`      base drive perms docker native firewall tailscale samba dns
-#   stage `services`  stack adlists backup maintenance quarterly watchdog heal
+#   stage `services`  stack arcane adlists backup maintenance quarterly watchdog heal
 #                     beszelagent diskguard fsck dnscutover
 #
 set -euo pipefail
@@ -43,7 +43,7 @@ warn() { printf '\033[1;33m !! %s\033[0m\n' "$*"; }
 # blocks below and is what makes `dns` (free port 53) precede the container
 # start, and `dnscutover` (point the host at Pi-hole) follow it.
 HOST_PHASES=(base drive perms docker native firewall tailscale samba dns)
-SERVICE_PHASES=(stack adlists backup maintenance quarterly watchdog heal
+SERVICE_PHASES=(stack arcane adlists backup maintenance quarterly watchdog heal
                 beszelagent diskguard fsck dnscutover)
 
 in_list() { local n="$1"; shift; local p; for p in "$@"; do [[ "$p" == "$n" ]] && return 0; done; return 1; }
@@ -114,6 +114,9 @@ LOCAL_HOSTNAME="${LOCAL_HOSTNAME:-raspberrypi}"
 LOCAL_DNS_NAME="${LOCAL_DNS_NAME:-home.internal}"
 DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
 DATA_DEV="${DATA_DEV:-/dev/sda1}"
+CADDY_HOST_SUBNET="${CADDY_HOST_SUBNET:-172.22.0.0/29}"
+CADDY_HOST_GATEWAY="${CADDY_HOST_GATEWAY:-172.22.0.1}"
+CADDY_HOST_IP="${CADDY_HOST_IP:-172.22.0.2}"
 DATA_SHARE_NAME="$(basename "$DATA_ROOT")"
 # systemd names a mount unit after the escaped path: /mnt/data becomes
 # mnt-data.mount.
@@ -387,9 +390,12 @@ if run firewall; then
   fi
   sed -i "s|^define admin_sources = .*|define admin_sources = { $_admin_nft }|" \
       /etc/nftables.conf
-  if ! grep -q "define admin_sources = { $_admin_nft }" /etc/nftables.conf; then
+  sed -i "s|^define caddy_host_ip = .*|define caddy_host_ip = $CADDY_HOST_IP|" \
+      /etc/nftables.conf
+  if ! grep -q "define admin_sources = { $_admin_nft }" /etc/nftables.conf \
+     || ! grep -q "define caddy_host_ip = $CADDY_HOST_IP" /etc/nftables.conf; then
     warn "could not write admin_sources into /etc/nftables.conf"
-    warn "the shipped file's 'define admin_sources' line must have been edited"
+    warn "the shipped file's generated define lines must have been edited"
     exit 1
   fi
 
@@ -634,6 +640,56 @@ fi
 # ================================================================= STACK =====
 if run stack; then
   say "Starting the container stack"
+  # Caddy needs a stable source address because nftables admits only that one
+  # container to the two host-networked admin backends. Validate the three
+  # values as a unit and reject an overlap before Compose reaches its much less
+  # useful "pool overlaps" failure halfway through provisioning.
+  python3 - "$CADDY_HOST_SUBNET" "$CADDY_HOST_GATEWAY" "$CADDY_HOST_IP" <<'PY'
+import ipaddress
+import json
+import subprocess
+import sys
+
+subnet = ipaddress.ip_network(sys.argv[1], strict=True)
+gateway = ipaddress.ip_address(sys.argv[2])
+caddy_ip = ipaddress.ip_address(sys.argv[3])
+if subnet.version != 4 or gateway not in subnet or caddy_ip not in subnet:
+    raise SystemExit("CADDY_HOST_SUBNET/GATEWAY/IP must describe one IPv4 network")
+if gateway in (subnet.network_address, subnet.broadcast_address) or caddy_ip in (subnet.network_address, subnet.broadcast_address):
+    raise SystemExit("Caddy gateway/IP cannot be the network or broadcast address")
+if gateway == caddy_ip:
+    raise SystemExit("CADDY_HOST_GATEWAY and CADDY_HOST_IP must differ")
+
+ids = subprocess.check_output(["docker", "network", "ls", "-q"], text=True).split()
+if ids:
+    networks = json.loads(subprocess.check_output(["docker", "network", "inspect", *ids], text=True))
+    for network in networks:
+        for config in network.get("IPAM", {}).get("Config", []) or []:
+            existing = config.get("Subnet")
+            if not existing:
+                continue
+            existing = ipaddress.ip_network(existing, strict=False)
+            if not subnet.overlaps(existing):
+                continue
+            if network.get("Name") == "pi-stack_caddy_host" and existing == subnet:
+                if ipaddress.ip_address(config.get("Gateway")) != gateway:
+                    raise SystemExit(f"pi-stack_caddy_host gateway is {config.get('Gateway')}, expected {gateway}")
+                for endpoint in (network.get("Containers") or {}).values():
+                    assigned = endpoint.get("IPv4Address", "").split("/")[0]
+                    if assigned and ipaddress.ip_address(assigned) == caddy_ip and endpoint.get("Name") != "caddy":
+                        raise SystemExit(f"CADDY_HOST_IP {caddy_ip} is already used by {endpoint.get('Name')}")
+                break
+            raise SystemExit(f"CADDY_HOST_SUBNET {subnet} overlaps Docker network {network.get('Name')} ({existing})")
+PY
+
+  # Changing the .env address without regenerating nftables would recreate a
+  # healthy-looking Caddy whose host admin routes all 502. Fail before pull/up.
+  if [[ -f /etc/nftables.conf ]] \
+     && ! grep -q "^define caddy_host_ip = $CADDY_HOST_IP$" /etc/nftables.conf; then
+    warn "CADDY_HOST_IP differs from /etc/nftables.conf. Apply it first:"
+    warn "  sudo bash provision.sh firewall"
+    exit 1
+  fi
   # Arcane needs the HOST's docker GID to reach /var/run/docker.sock. It differs
   # between installs, so derive it rather than trusting the value in .env — a
   # stale GID gives a working UI that lists nothing, which is a confusing failure.
@@ -727,10 +783,13 @@ if run stack; then
   # and are untouched by this.
   cp -a "$STACK/config/filebrowser-config.yaml" "$STACK/appdata/filebrowser/config.yaml"
 
-  # Harmless for appdata/caddy: the official Caddy image runs as root, which
-  # ignores ownership. Left in the sweep rather than special-cased so there is
-  # one rule for this directory, not an exception to remember.
-  chown -R 1000:1000 "$STACK/appdata"
+  # Harmless for appdata/caddy: the official Caddy image runs as root. The one
+  # required exception is beszel-agent: that is a native service running as its
+  # own `beszel` user, and changing it to 1000:1000 breaks restore ownership and
+  # eventually prevents the agent from updating its fingerprint/state.
+  chown 1000:1000 "$STACK/appdata"
+  find "$STACK/appdata" -mindepth 1 -maxdepth 1 ! -name beszel-agent \
+    -exec chown -R 1000:1000 {} +
   cd "$STACK"
   # --ignore-buildable skips Caddy, which has no upstream image to pull (it is
   # built from ./caddy). Without it, compose tries to pull pi-stack/caddy:<ver>
@@ -766,6 +825,31 @@ if run stack; then
   # Arcane's password is not provisionable: it enforces 12+ chars with upper,
   # lower, digit and symbol, and the CLI reset needs both a TTY and
   # ALLOW_CLI_PASSWORD_RESET=true. Set it by hand after first boot; see README.
+fi
+
+# ================================================================ ARCANE =====
+# Arcane and Diun otherwise perform the same registry lookups. Diun is the
+# declared automatic monitor; leave Arcane's manual check available but turn
+# its hourly poller off in the persistent settings database on every provision.
+if run arcane; then
+  say "Disabling duplicate Arcane image polling (Diun remains authoritative)"
+  _arcane_db="$STACK/appdata/arcane/arcane.db"
+  if [[ ! -f "$_arcane_db" ]]; then
+    warn "Arcane database is not present yet. Run the stack phase, then re-run:"
+    warn "  sudo bash provision.sh arcane"
+    exit 1
+  fi
+  _arcane_rows="$(sqlite3 "$_arcane_db" \
+    "UPDATE settings SET value='false', updatedAt=CURRENT_TIMESTAMP WHERE key='pollingEnabled'; SELECT changes();")"
+  if [[ "$_arcane_rows" != 1 ]] \
+     || [[ "$(sqlite3 "$_arcane_db" "SELECT value FROM settings WHERE key='pollingEnabled';")" != false ]]; then
+    warn "Arcane pollingEnabled was not updated; its settings schema may have changed."
+    exit 1
+  fi
+  if [[ "$(docker inspect -f '{{.State.Running}}' arcane 2>/dev/null || true)" == true ]]; then
+    docker compose -f "$STACK/docker-compose.yml" restart arcane >/dev/null
+  fi
+  say "Arcane automatic image polling disabled; manual checks remain available"
 fi
 
 # =============================================================== ADLISTS =====

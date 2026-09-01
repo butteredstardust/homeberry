@@ -22,6 +22,11 @@
 #
 set -euo pipefail
 
+# Archives contain .env credentials and appdata private keys. Keep both newly
+# transferred and already-present copies private even if rsync or the caller's
+# default umask would otherwise make them readable by other local users.
+umask 0077
+
 PI="${PI_HOST:-pi}"                    # ~/.ssh/config alias
 SRC="${PI_DATA_ROOT:-/mnt/rpidata}/backup/appdata"
 DEST="${PI_BACKUP_DEST:-$HOME/pi-backups}"
@@ -50,6 +55,7 @@ echo "$(date "+%Y-%m-%dT%H:%M:%S%z") pulling core snapshots from $PI:$SRC"
 rsync -a -e "ssh $SSH_OPTS" \
       --include='appdata-core-*.tar.gz' --exclude='*' \
       "$PI:$SRC/" "$DEST/"
+find "$DEST" -maxdepth 1 -type f -name 'appdata-core-*.tar.gz' -exec chmod 600 {} +
 
 # Verify the newest archive is actually readable rather than a truncated
 # transfer. A backup you have never tested is a rumour.

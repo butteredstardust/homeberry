@@ -99,6 +99,11 @@ Other listening ports: `53` (DNS), `139`/`445` (Samba), `51413` (Transmission
 peer), `32410`–`32414` (Plex DLNA), Homebridge HAP (ephemeral).
 Authoritative list: `sudo ss -lntp`.
 
+Homebridge uses `bonjour-hap` while the host Avahi daemon provides the machine's
+normal `.local` presence. `ENABLE_AVAHI=0` prevents the host-networked container
+from starting another Avahi daemon on the same UDP socket. Do not remove it to
+troubleshoot discovery; doing so restores the duplicate mDNS-stack warning.
+
 ### 1.2 Reading the passwords
 
 `.env` is mode 600 and root-owned, so `sudo` is not optional. This prints all six
@@ -243,7 +248,9 @@ fix; read the logs.
 ### 2.3 Restore appdata
 
 Main recovery path. Snapshots in `/mnt/rpidata/backup/appdata/`, mirrored to
-`~/pi-backups/` on the workstation (set in `mac/pull-backups.sh`). Tarball root is `appdata/`.
+`~/pi-backups/` on the workstation (set in `mac/pull-backups.sh`). Tarball root
+contains both `.env` and `appdata/`. Archives are mode `0600` because `.env`
+contains every service credential and the appdata tree contains private keys.
 
 ```bash
 cd /opt/pi-stack
@@ -251,6 +258,7 @@ ls -lht /mnt/rpidata/backup/appdata/
 docker compose down
 sudo systemctl stop beszel-agent
 sudo mv appdata appdata.broken                      # keep it, don't delete
+sudo cp -a .env .env.before-restore                 # current site config rollback
 sudo tar --same-owner -xzf /mnt/rpidata/backup/appdata/appdata-core-YYYYMMDD-HHMM.tar.gz -C /opt/pi-stack
 sudo chown -R beszel:beszel appdata/beszel-agent
 docker compose up -d
@@ -261,9 +269,10 @@ Single service: `sudo tar -xzf <snap>.tar.gz -C /opt/pi-stack appdata/homebridge
 
 **`core` vs `full`:** `core` (nightly, ~70 MB, keep 7) holds everything
 irreplaceable — Plex library DB and watch state, HomeKit pairings, torrent resume
-data, Pi-hole config, Caddy's certificates. `full` (Sat 03:00, ~2.4 GB, keep 1)
-adds Plex's `Metadata/` artwork, which Plex re-downloads by itself. **Restoring
-`core` loses nothing permanent.**
+data, Pi-hole config, Caddy's certificates, and `.env` (credentials, drive
+identity, firewall sources and the private `PIHOLE_EXTRA_HOSTS` inventory).
+`full` (Sat 03:00, ~2.4 GB, keep 1) adds Plex's `Metadata/` artwork, which Plex
+re-downloads by itself. **Restoring `core` loses nothing permanent.**
 
 `pi-restore-test.timer` independently proves this every quarter: it extracts
 the newest core archive under `/var/tmp`, checks load-bearing paths and Beszel
@@ -424,6 +433,14 @@ read the caveat below before relying on them:
 | Beszel | `https://metrics.${CADDY_DOMAIN}` | CPU/mem/disk/net **history**, which nothing else here keeps |
 | Diun | its own log, read via Dozzle | daily "a newer image was published" |
 
+Diun is the only automatic image-update monitor. `provision.sh arcane` sets
+Arcane's **Environment → Jobs → Enable Polling** setting off after the first
+stack start, avoiding duplicate hourly Docker Distribution lookups and their
+transient registry timeouts; its manual image check still works. The setting
+lives in `appdata/arcane/arcane.db`, so it survives container recreation and is
+included in the normal appdata backups. The `services` stage runs this phase;
+on an older deployment, run it once explicitly.
+
 ⚠ **None of these changed the first sentence of this section: nothing notifies
 you.** They are dashboards — they report only when someone opens them. Beszel can
 alert but has not been configured to, and Diun's notifiers are deliberately off
@@ -512,6 +529,7 @@ nftables, nothing but Docker's own publish rules.
 | Tier 1 dropped | everything else — i.e. any public source address |
 | Tier 2 | `$admin_ports` (`22`, `8080`, `8581`) restricted to `$admin_sources` |
 | `$admin_sources` | generated from `ADMIN_SOURCES` in `.env` by `provision.sh firewall` |
+| Caddy host path | `$CADDY_HOST_IP` may reach only host ports `8080` and `8581` |
 
 **Tier 1 — what it buys.** The LAN keeps unrestricted access to the household
 services, so nothing in the house behaves differently. The only traffic dropped
@@ -543,6 +561,15 @@ sudo bash provision.sh firewall
 `provision.sh` arms `fw-deadman` automatically whenever `ADMIN_SOURCES` differs
 from the default, and tells you to stop the timer once you have confirmed access
 from a **new** session.
+
+Caddy reaches host-networked Pi-hole and Homebridge over the dedicated
+`caddy_host` bridge. `CADDY_HOST_SUBNET`, `CADDY_HOST_GATEWAY` and
+`CADDY_HOST_IP` in `.env` feed Compose and the generated nftables definition.
+`provision.sh stack` validates the set, rejects overlap with an existing Docker
+network, and refuses to start if `/etc/nftables.conf` still has a different
+address. Only Caddy's one IP is admitted to `8080` and `8581` before the Tier 2
+drop; broadening this to a subnet would let other containers bypass the
+workstation-only admin rule.
 
 **Tier 2 stops at layer 4, and that is not a gap — it is a split.** Once every
 web UI is behind Caddy on `:443`, the firewall cannot tell `docker.DOMAIN` from
@@ -754,10 +781,16 @@ Ad blocking is **not** affected by this — verified, a blocked domain still
 returns `0.0.0.0` five times out of five, because Pi-hole answers positively and
 fast. Only names existing *solely* in Pi-hole are hit.
 
-The record is declared as `FTLCONF_dns_hosts` on the pihole service in
-`docker-compose.yml`, semicolon-separated. ⚠ Do **not** add local DNS records in
-the Pi-hole web UI or by editing `pihole.toml` — Pi-hole rewrites that file and
-the next container recreate discards them.
+The base record is declared as `FTLCONF_dns_hosts` on the pihole service in
+`docker-compose.yml`. Additional DHCP-reserved devices belong in the untracked
+`.env` as semicolon-separated `PIHOLE_EXTRA_HOSTS` entries. ⚠ Do **not** add
+local DNS records in the Pi-hole web UI or by editing `pihole.toml` — Pi-hole
+rewrites that file and the next container recreate discards them.
+
+Conditional forwarding is intentionally disabled and is equally declarative:
+`FTLCONF_dns_revServers: ""` pins `dns.revServers` to an empty array on every
+Pi-hole start. Do not replace the empty string with the literal `"[]"`; Pi-hole
+v6 treats that as no override and retains an old router-forwarding entry.
 
 **Things that will bite you:**
 
