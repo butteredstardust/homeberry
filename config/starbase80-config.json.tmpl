@@ -56,6 +56,12 @@
 		"category": "Admin",
 		"services": [
 			{
+				"name": "Authelia",
+				"uri": "https://auth.${CADDY_DOMAIN}",
+				"description": "Login portal · manage your TOTP and WebAuthn devices",
+				"icon": "/icons/authelia.png"
+			},
+			{
 				"name": "Pi-hole",
 				"uri": "https://pihole.${CADDY_DOMAIN}/admin/",
 				"description": "DNS and ad blocking · password only, no username",

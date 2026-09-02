@@ -790,10 +790,10 @@ PY
 
   # starbase80's icons are deliberately LOCAL rather than CDN-fetched, so the
   # dashboard renders with no internet and makes no outbound requests per load.
-  # Nine files, ~270 KB, which also lands in the nightly appdata backup.
+  # Thirteen files, ~400 KB, which also lands in the nightly appdata backup.
   # Missing icons are not fatal — you get a broken image, not a broken page —
   # so a download failure only warns.
-  for _icon in pi-hole plex transmission filebrowser homebridge microbin arcane samba-server raspberry-pi; do
+  for _icon in pi-hole plex transmission filebrowser homebridge microbin arcane samba-server raspberry-pi authelia beszel dozzle tailscale; do
     _dest="$STACK/appdata/starbase80/icons/${_icon}.png"
     [[ -s "$_dest" ]] && continue
     curl -sfL -m 20 -o "$_dest" \

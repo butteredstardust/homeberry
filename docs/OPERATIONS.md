@@ -766,8 +766,8 @@ Added 2026-08-25 so nobody has to remember which port a service lives on.
 |---|---|
 | Image | `jordanroher/starbase-80` v1.6.6, digest-pinned |
 | Port | **8084** on the host → 4173 in the container (nginx listens on 4173) |
-| Links | `starbase80-config.json`, mounted read-only |
-| Icons | `appdata/starbase80/icons/`, 9 PNGs, ~270 KB, served locally |
+| Links | `appdata/starbase80/config.json`, mounted read-only — **rendered** by `provision.sh` from `config/starbase80-config.json.tmpl`; edit the template, not the output |
+| Icons | `appdata/starbase80/icons/`, 13 PNGs, ~400 KB, served locally |
 | Auth | **none** — it is a page of links; the firewall and "never forward" are the control |
 
 **Four names reach it, all now through Caddy:**
@@ -823,7 +823,7 @@ v6 treats that as no override and retains an old router-forwarding entry.
   holds no secrets, mounts only two read-only paths and has no socket.
 - **Bad JSON takes the dashboard down, deliberately** — the entrypoint validates
   `config.json` and exits 1 rather than serve a broken page. Nothing else in the
-  stack is affected. Check with `python3 -m json.tool starbase80-config.json`
+  stack is affected. Check with `jq empty appdata/starbase80/config.json`
   before restarting.
 - **The links moved from raw IPs to HTTPS names on 2026-08-26**, reversing the
   rule that used to be here. The old reasoning was that Pi-hole names fail on a
@@ -831,9 +831,27 @@ v6 treats that as no override and retains an old router-forwarding entry.
   **public** records, so they resolve on any device, including one using Google's
   resolvers, which `home.internal` never could. Plex and Samba keep raw IPs —
   Plex is unproxied and `smb://` is not HTTP.
-- Editing links: `starbase80-config.json` → `docker compose up -d
-  --force-recreate starbase80`. The mount is read-only, so the running container
-  never rewrites it.
+- **Editing links: edit `config/starbase80-config.json.tmpl`, never
+  `appdata/starbase80/config.json`.** The latter is the mount, but it is generated
+  — `provision.sh` `sed`s `${LAN_IP}`, `${CADDY_DOMAIN}` and `${DATA_SHARE_NAME}`
+  into it and overwrites it on the next run, so a hand edit there is silently lost.
+  Re-render without a full provision run:
+
+  ```bash
+  cd /opt/pi-stack && set -a && . ./.env && set +a
+  sed -e "s|\${LAN_IP}|$LAN_IP|g" -e "s|\${CADDY_DOMAIN}|$CADDY_DOMAIN|g" \
+      -e "s|\${DATA_SHARE_NAME}|$DATA_SHARE_NAME|g" \
+      config/starbase80-config.json.tmpl > /tmp/sb.new
+  jq empty /tmp/sb.new && sudo install -o 1000 -g 1000 -m644 /tmp/sb.new \
+      appdata/starbase80/config.json
+  sudo docker compose restart starbase80
+  ```
+
+  A `restart` is enough: the entrypoint re-reads the file and rebuilds at every
+  start. The mount is read-only, so the running container never rewrites it.
+  Cost an hour once: a new tile was added to the template, the file deployed and
+  the container restarted — and nothing changed, because the template is not what
+  is mounted.
 
 ### 7.4 HTTPS (Caddy + Let's Encrypt + DuckDNS)
 
