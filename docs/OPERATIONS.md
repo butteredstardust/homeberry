@@ -1912,6 +1912,26 @@ sudo docker compose exec authelia authelia config validate
   The current container then runs the new active config, and its next normal
   start mounts the new host inode. Do not force-recreate it just to refresh the
   mount; that needlessly puts the ACME path at risk.
+- **`authn_strategies` is pinned to `CookieSession`, and removing it breaks
+  Transmission.** Authelia's default strategy list for the forward-auth endpoint
+  also includes `HeaderAuthorization` / `HeaderProxyAuthorization`, which make it
+  claim any `Authorization: Basic` header the browser sends. Transmission has its
+  own RPC password, so the browser prompts, then attaches those credentials to
+  every later request; Authelia consumed them, and because these vhosts are
+  `two_factor` a Basic header can never satisfy more than one factor. The symptom
+  is a password box on `torrents.` that no password will open, followed by a
+  bounce back to the portal — it looks exactly like a wrong password. Found and
+  fixed 2026-09-02. Reproduce either state from the Pi:
+
+  ```bash
+  cd /opt/pi-stack; set -a; . ./.env; set +a
+  B=$(printf 'pi:%s' "$TRANSMISSION_PASSWORD" | base64)
+  curl -s -o /dev/null -D- -H 'X-Forwarded-Method: GET' -H 'X-Forwarded-Proto: https' \
+    -H "X-Forwarded-Host: torrents.$CADDY_DOMAIN" -H 'X-Forwarded-Uri: /transmission/web/' \
+    -H "Authorization: Basic $B" http://127.0.0.1:8087/api/authz/forward-auth | head -1
+  # 302 to the portal = correct. 401 = the header strategies are back.
+  ```
+
 - No nftables change is needed: `:8087` binds only to loopback, Authelia is
   bridged, and Caddy reaches it on the Compose network.
 - The portal is not a dashboard tile. It is a login/enrolment workflow reached

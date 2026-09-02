@@ -4,6 +4,33 @@
 
 server:
   address: 'tcp://0.0.0.0:9091/'
+  endpoints:
+    authz:
+      forward-auth:
+        implementation: 'ForwardAuth'
+        # ⚠ COOKIE SESSION ONLY, DELIBERATELY — DO NOT ADD THE HEADER STRATEGIES.
+        # Authelia's default strategy list for this endpoint also includes
+        # HeaderAuthorization / HeaderProxyAuthorization, which make it CONSUME
+        # any `Authorization: Basic` header the browser sends and treat it as a
+        # login attempt against Authelia's own user database.
+        #
+        # That breaks every backend behind this proxy that has its own HTTP
+        # Basic auth — here, Transmission. The browser gets Transmission's 401,
+        # prompts, and then sends those credentials on EVERY subsequent request;
+        # Caddy copies them into the authz subrequest; Authelia claims them,
+        # and because these vhosts are `two_factor` a Basic header can only ever
+        # satisfy ONE factor. So Authelia answers 401 with its own
+        # `WWW-Authenticate: Basic realm="Authorization Required"`, the user sees
+        # a password box that NO password can satisfy, and it bounces back to the
+        # portal. Found 2026-09-02, in exactly that shape.
+        #
+        # Restricting the endpoint to CookieSession makes Authelia authenticate
+        # from its session cookie alone and pass `Authorization` through
+        # untouched, so Transmission's own login works behind the portal and the
+        # two tiers stay independent — which is the posture the rest of this
+        # stack is built on.
+        authn_strategies:
+          - name: 'CookieSession'
 
 log:
   level: 'info'
