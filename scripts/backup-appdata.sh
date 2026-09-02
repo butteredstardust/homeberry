@@ -144,6 +144,7 @@ EXCLUDES=(
 # exclude the replacement copies. A transform maps it back inside the archive.
 SQLITE_DATABASES=(
   'appdata/arcane/arcane.db'
+  'appdata/authelia/db.sqlite3'
   'appdata/beszel/auxiliary.db'
   'appdata/beszel/data.db'
   'appdata/microbin/database.sqlite'

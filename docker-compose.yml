@@ -27,6 +27,63 @@ x-common: &common
 
 services:
 
+  # --------------------------------------------------------------- Authelia --
+  # Forward-auth gateway for every admin vhost. Caddy still applies its
+  # (adminonly) IP tier first; Authelia is the authentication tier after it.
+  #
+  # v4.39 is the patch channel; this digest is v4.39.20's linux/arm64 manifest,
+  # verified before deployment. The digest is immutable and the tag records the
+  # channel quarterly-update.sh follows.
+  authelia:
+    <<: *common
+    image: authelia/authelia:4.39@sha256:68277b28658a69bb3f512c2c23c41c7df7d9311d0e506e64e26c96dcd75d0539
+    container_name: authelia
+    # The image's entrypoint supports PUID/PGID, but an explicit Docker user is
+    # the enforceable boundary. appdata/authelia is created 1000:1000 by the
+    # authelia provision phase; otherwise SQLite fails exactly as MicroBin did.
+    user: "1000:1000"
+    ports:
+      # Break-glass only. Host 9091 already belongs to Transmission, so
+      # Authelia's container :9091 is intentionally published as host :8087.
+      - "${BIND_ADDR:-127.0.0.1}:8087:9091"
+    environment:
+      <<: *env
+      CADDY_DOMAIN: ${CADDY_DOMAIN:?set CADDY_DOMAIN in .env}
+      # Stable Go-template filter, used only for the domain and portal URLs in
+      # the read-only configuration file. Lists such as session.cookies and
+      # access_control.rules cannot be expressed as ordinary env overrides.
+      X_AUTHELIA_CONFIG_FILTERS: template
+      # Env-borne secrets are visible to anything with Docker API read access.
+      # That is honest continuation of this stack's existing posture: Dozzle
+      # and Arcane can already inspect container environments. File secrets
+      # would improve this, but would add a second secret store beside .env.
+      AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET: ${AUTHELIA_JWT_SECRET:?set AUTHELIA_JWT_SECRET in .env}
+      AUTHELIA_SESSION_SECRET: ${AUTHELIA_SESSION_SECRET:?set AUTHELIA_SESSION_SECRET in .env}
+      AUTHELIA_STORAGE_ENCRYPTION_KEY: ${AUTHELIA_STORAGE_ENCRYPTION_KEY:?set AUTHELIA_STORAGE_ENCRYPTION_KEY in .env}
+    volumes:
+      - ./config/authelia-configuration.yml:/config/configuration.yml:ro
+      - ./appdata/authelia:/var/lib/authelia
+    # The official image is minimal, but it ships this purpose-built script.
+    # A curl/wget check would fail permanently and the container watchdog would
+    # restart it in a loop — the same trap already documented for Arcane/Dozzle.
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 1m
+    # Argon2id defaults to 65,536 KiB TOTAL per concurrent hash; parallelism=4
+    # divides that memory into lanes, it does not multiply it by four. 256 MiB
+    # leaves too little room for the daemon plus overlapping login/enrolment
+    # work. 512 MiB accommodates five simultaneous hashes (320 MiB) with about
+    # 192 MiB left for the Go runtime, SQLite and allocator retention.
+    mem_limit: 512m
+    # Deliberately no depends_on in either direction. Caddy also fronts Pi-hole
+    # and the dashboard, so one sick backend must not stop every name. The cost
+    # is explicit: if Authelia is down every admin vhost returns 502; recover by
+    # SSH and the BIND_ADDR-bound service ports. No external DNS override is
+    # needed: the filesystem notifier performs no outbound delivery.
+
   # ---------------------------------------------------------------- Pi-hole --
   # host networking is mandatory: it needs to own :53 on the LAN address and
   # answer from the same IP the router advertises (${LAN_IP}).

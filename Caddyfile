@@ -103,6 +103,17 @@
 	respond @notadmin "403 — this service is restricted to admin sources. See ADMIN_SOURCES in .env." 403
 }
 
+# The authentication tier. This is imported only AFTER (adminonly), inside each
+# admin handle's route block, so an untrusted LAN source cannot even reach the
+# login portal. These names and headers are Authelia v4.39's official Caddy
+# forward-auth integration; /api/verify is the obsolete endpoint.
+(authelia) {
+	forward_auth authelia:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Email Remote-Name
+	}
+}
+
 # Shared proxy hygiene. Caddy already sets X-Forwarded-For / -Proto / -Host and
 # passes the original Host through, which is all any of these apps need — but
 # WebSocket upgrades (Homebridge's log stream, Arcane's live container view)
@@ -112,6 +123,18 @@
 # ============================================================ HTTPS services ==
 *.{$CADDY_DOMAIN} {
 	import duckdns_tls
+
+	# ---------------------------------------------------- login / enrolment --
+	# The portal itself stays behind the same IP tier as every consumer of it.
+	# This does NOT recurse through forward_auth; it proxies Authelia directly.
+	# auth. is a bypass rule inside Authelia so its own assets and APIs work.
+	@auth host auth.{$CADDY_DOMAIN}
+	handle @auth {
+		route {
+			import adminonly
+			reverse_proxy authelia:9091
+		}
+	}
 
 	# ------------------------------------------------------------ dashboard --
 	# NOT behind (adminonly), by design: the dashboard and the pastebin are
@@ -143,6 +166,7 @@
 	handle @pihole {
 		route {
 			import adminonly
+			import authelia
 			# Pi-hole v6 serves nothing useful at /, so save the click.
 			redir / /admin/ 302
 			reverse_proxy host.docker.internal:8080
@@ -154,6 +178,7 @@
 	handle @files {
 		route {
 			import adminonly
+			import authelia
 			reverse_proxy filebrowser:80
 		}
 	}
@@ -180,6 +205,7 @@
 	handle @torrents {
 		route {
 			import adminonly
+			import authelia
 			redir / /transmission/web/ 302
 			reverse_proxy transmission:9091
 		}
@@ -195,6 +221,7 @@
 	handle @docker {
 		route {
 			import adminonly
+			import authelia
 			reverse_proxy arcane:3552
 		}
 	}
@@ -206,6 +233,7 @@
 	handle @homebridge {
 		route {
 			import adminonly
+			import authelia
 			reverse_proxy host.docker.internal:8581
 		}
 	}
@@ -219,6 +247,7 @@
 	handle @logs {
 		route {
 			import adminonly
+			import authelia
 			reverse_proxy dozzle:8080
 		}
 	}
@@ -230,6 +259,7 @@
 	handle @metrics {
 		route {
 			import adminonly
+			import authelia
 			reverse_proxy beszel:8090
 		}
 	}

@@ -59,6 +59,7 @@ CADDY_DOMAIN="$(env_get CADDY_DOMAIN)"
 # schema — tracking it here would upgrade this box into a migration at 01:00 on
 # a Saturday with nobody watching. Move it deliberately, not on this list.
 CHANNELS=(
+  "authelia|authelia/authelia:4.39"
   "pihole|pihole/pihole:latest"
   "plex|lscr.io/linuxserver/plex:latest"
   "transmission|lscr.io/linuxserver/transmission:latest"
@@ -113,6 +114,17 @@ health_ok() {
     curl -sf -o /dev/null -m 10 http://127.0.0.1:8084/                                   || ok=0
     curl -sf -o /dev/null -m 10 http://127.0.0.1:8085/                                   || ok=0
     curl -sf -o /dev/null -m 10 http://127.0.0.1:8086/                                   || ok=0
+    # The portal is deliberately reachable without an existing session so a
+    # user can log in and enrol TOTP. 200 is therefore the healthy unauthenticated
+    # response; :8087 is the host break-glass port, not container :9091.
+    curl -s -o /dev/null -m 10 -w '%{http_code}' http://127.0.0.1:8087/ | grep -q '^200$' || ok=0
+    # The authz endpoint redirects a valid unauthenticated request to the
+    # configured portal. Observed with v4.39.20: 302 (a request for an unknown
+    # domain is 400, so include the real forwarded host in this probe).
+    curl -s -o /dev/null -m 10 -w '%{http_code}' \
+         -H 'X-Forwarded-Proto: https' -H "X-Forwarded-Host: files.${CADDY_DOMAIN}" \
+         -H 'X-Forwarded-URI: /' -H 'X-Forwarded-Method: GET' \
+         http://127.0.0.1:8087/api/authz/forward-auth | grep -q '^302$' || ok=0
     systemctl is-active --quiet beszel-agent.service                                     || ok=0
     # Prove the native agent is connected, not merely running, and that its
     # hourly SMART feed is still reaching the hub after a paired update.

@@ -50,6 +50,7 @@ never the value.
 | Service | HTTPS name (`*.${CADDY_DOMAIN}`) | Fallback | User | Password |
 |---|---|---|---|---|
 | **Dashboard** | **`home.`** — the front door, links to everything below | `:8084` | none | none |
+| Authelia | `auth.` — login and TOTP enrolment portal | `:8087` → container `:9091` | `pi` | `.env` → `AUTHELIA_PASSWORD` |
 | Pi-hole | `pihole.` → `/admin` | `:8080/admin` | **none — v6 has no username field** | `.env` → `PIHOLE_PASSWORD` |
 | Plex | **not proxied, on purpose** | `:32400/web` | plex.tv account | not on this box |
 | Transmission | `torrents.` | `:9091` | `pi` | `.env` → `TRANSMISSION_PASSWORD` |
@@ -106,8 +107,8 @@ troubleshoot discovery; doing so restores the duplicate mDNS-stack warning.
 
 ### 1.2 Reading the passwords
 
-`.env` is mode 600 and root-owned, so `sudo` is not optional. This prints all six
-— Pi-hole, Samba, Filebrowser, Transmission, Arcane, MicroBin:
+`.env` is mode 600 and root-owned, so `sudo` is not optional. This prints all seven
+— Pi-hole, Samba, Filebrowser, Transmission, Arcane, MicroBin, Authelia:
 
 ```bash
 sudo grep -E '_PASSWORD=' /opt/pi-stack/.env               # on the Pi
@@ -268,8 +269,9 @@ sudo systemctl start beszel-agent
 Single service: `sudo tar -xzf <snap>.tar.gz -C /opt/pi-stack appdata/homebridge`
 
 **`core` vs `full`:** `core` (nightly, ~70 MB, keep 7) holds everything
-irreplaceable — Plex library DB and watch state, HomeKit pairings, torrent resume
-data, Pi-hole config, Caddy's certificates, and `.env` (credentials, drive
+irreplaceable — Plex library DB and watch state, HomeKit pairings, Authelia's
+TOTP enrolments, torrent resume data, Pi-hole config, Caddy's certificates, and
+`.env` (credentials, drive
 identity, firewall sources and the private `PIHOLE_EXTRA_HOSTS` inventory).
 `full` (Sat 03:00, ~2.4 GB, keep 1) adds Plex's `Metadata/` artwork, which Plex
 re-downloads by itself. **Restoring `core` loses nothing permanent.**
@@ -360,7 +362,7 @@ all of them:
 ```bash
 ssh -N -L 8084:127.0.0.1:8084 -L 8082:127.0.0.1:8082 -L 8083:127.0.0.1:8083 \
        -L 9091:127.0.0.1:9091 -L 3552:127.0.0.1:3552 -L 8085:127.0.0.1:8085 \
-       -L 8086:127.0.0.1:8086 pi@<LAN_IP>
+       -L 8086:127.0.0.1:8086 -L 8087:127.0.0.1:8087 pi@<LAN_IP>
 ```
 
 `http://<LAN_IP>/` also still reaches the dashboard, since Caddy serves that
@@ -1799,6 +1801,125 @@ sudo docker network inspect pi-stack_socketproxy_ro pi-stack_socketproxy_rw \
 ```
 
 ---
+
+### 7.10 Authelia (forward-auth and TOTP)
+
+Added 2026-09-02. Caddy now sends every admin vhost through Authelia after the
+existing `(adminonly)` source-IP check. The two controls answer different
+questions and their order is fixed inside each `route`:
+
+```
+client → ADMIN_SOURCES allowlist → Authelia password + TOTP → backend login
+```
+
+| | |
+|---|---|
+| Image | `authelia/authelia:4.39`, digest-pinned to v4.39.20 linux/arm64 |
+| Portal | `https://auth.${CADDY_DOMAIN}/` |
+| Break-glass | `127.0.0.1:8087` → container `:9091`; 9091 on the host remains Transmission |
+| User backend | `appdata/authelia/users_database.yml`, Argon2id |
+| State | `appdata/authelia/db.sqlite3` — SQLite, including TOTP enrolments |
+| Session | memory; a container restart requires a fresh login |
+| Notification | `appdata/authelia/notification.txt`; no SMTP or external DNS |
+| Policy | default `deny`; `auth.` / `home.` / `paste.` bypass; the seven admin names `two_factor` |
+
+**First TOTP enrolment — human required:**
+
+1. Open `https://auth.${CADDY_DOMAIN}/`.
+2. Sign in as `pi`; read `AUTHELIA_PASSWORD` from
+   `/opt/pi-stack/.env` (default `raspberry` by the explicit LAN-login
+   decision).
+3. Ask Authelia to register a TOTP device. It writes the confirmation link to
+   the filesystem notifier.
+4. Print the notification, open the newest link, and scan its QR code:
+
+   ```bash
+   ssh pi 'sudo cat /opt/pi-stack/appdata/authelia/notification.txt'
+   ```
+
+5. Re-open one protected name and complete password + TOTP. Its own service
+   login then appears; it was not removed.
+
+⚠ **Until step 5 succeeds, no admin vhost is usable through Caddy.** This is the
+intended fail-closed state. The way in is SSH plus a tunnel to the loopback
+ports, for example:
+
+```bash
+ssh -N -L 8087:127.0.0.1:8087 -L 8082:127.0.0.1:8082 \
+       -L 8085:127.0.0.1:8085 pi@<LAN_IP>
+# portal: http://127.0.0.1:8087
+# files:  http://127.0.0.1:8082
+# logs:   http://127.0.0.1:8085
+```
+
+**Lost TOTP device:**
+
+```bash
+cd /opt/pi-stack
+sudo docker compose exec authelia authelia storage user totp delete pi
+```
+
+Then repeat the enrolment runbook above. This deletes only user `pi`'s TOTP
+record; it does not change the password or storage key. If the database itself
+was lost, restore the newest core backup — `db.sqlite3` is copied through
+SQLite's online backup API and is never excluded. Losing it loses every enrolled
+factor.
+
+**Password change:** edit `AUTHELIA_PASSWORD` in `.env`, then run
+`sudo bash provision.sh authelia` and recreate Authelia. The phase generates a
+new Argon2id hash with the exact digest-pinned binary and atomically replaces the
+users file. It does this on every run, so a password changed in the portal is
+temporary and the next provision re-applies `.env`.
+
+```bash
+sudo bash /opt/pi-stack/provision.sh authelia
+cd /opt/pi-stack && sudo docker compose up -d authelia
+sudo docker compose exec authelia authelia config validate
+```
+
+**Gotchas, all deliberate:**
+
+- v4.39 uses `/api/authz/forward-auth` and copies `Remote-User`,
+  `Remote-Groups`, `Remote-Email`, `Remote-Name`. Do not restore the old
+  `/api/verify` endpoint.
+- `session.cookies` is a list. The domain and URL values are rendered by the
+  stable Go-template filter (`X_AUTHELIA_CONFIG_FILTERS=template`); ordinary
+  environment overrides cannot represent lists of objects.
+- The image has no curl/wget assumption. Its supported health mechanism is
+  `/app/healthcheck.sh`; changing this to a shell probe causes the watchdog
+  restart loop seen previously with Arcane and Dozzle.
+- Argon2id uses 65,536 KiB total per concurrent hash, not per each of its four
+  lanes. The 512 MiB limit budgets 320 MiB for five simultaneous hashes and
+  roughly 192 MiB for the daemon, SQLite and retained Go allocations.
+- Secrets are environment variables and therefore visible through Docker API
+  inspection. That matches the existing Arcane/Dozzle posture; it is not
+  equivalent to Docker secrets.
+- There is no Caddy/Authelia `depends_on`. If Authelia is down, protected names
+  return 502, but Caddy, Pi-hole's UI route, the household names and certificate
+  management remain independently startable.
+- **rsync replaces a file atomically; Docker's single-file bind mount keeps the
+  old inode until the container starts again.** After an rsync deployment,
+  `docker exec caddy caddy validate --config /etc/caddy/Caddyfile` can therefore
+  validate the old file and report a false success. Validate and reload the new
+  host copy over stdin, without recreating Caddy:
+
+  ```bash
+  cd /opt/pi-stack
+  sudo docker exec -i caddy caddy validate --config - --adapter caddyfile < Caddyfile
+  sudo docker exec -i caddy caddy reload --config - --adapter caddyfile < Caddyfile
+  ```
+
+  The current container then runs the new active config, and its next normal
+  start mounts the new host inode. Do not force-recreate it just to refresh the
+  mount; that needlessly puts the ACME path at risk.
+- No nftables change is needed: `:8087` binds only to loopback, Authelia is
+  bridged, and Caddy reaches it on the Compose network.
+- The portal is not a dashboard tile. It is a login/enrolment workflow reached
+  automatically from protected links, not a household destination worth
+  advertising.
+
+---
+
 
 ## 8. Update policy
 

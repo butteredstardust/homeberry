@@ -26,7 +26,7 @@
 # Individual phases are idempotent and can be re-run alone at any time:
 #
 #   stage `host`      base drive perms docker native firewall tailscale samba dns
-#   stage `services`  stack arcane adlists backup maintenance quarterly watchdog heal
+#   stage `services`  authelia stack arcane adlists backup maintenance quarterly watchdog heal
 #                     beszelagent diskguard fsck dnscutover
 #
 set -euo pipefail
@@ -43,7 +43,7 @@ warn() { printf '\033[1;33m !! %s\033[0m\n' "$*"; }
 # blocks below and is what makes `dns` (free port 53) precede the container
 # start, and `dnscutover` (point the host at Pi-hole) follow it.
 HOST_PHASES=(base drive perms docker native firewall tailscale samba dns)
-SERVICE_PHASES=(stack arcane adlists backup maintenance quarterly watchdog heal
+SERVICE_PHASES=(authelia stack arcane adlists backup maintenance quarterly watchdog heal
                 beszelagent diskguard fsck dnscutover)
 
 in_list() { local n="$1"; shift; local p; for p in "$@"; do [[ "$p" == "$n" ]] && return 0; done; return 1; }
@@ -635,6 +635,54 @@ if run dns; then
   # resolver to 127.0.0.1 would leave this machine with no DNS for the rest of
   # provisioning — no apt, no image pulls, no Caddy build. That is the
   # `dnscutover` phase, at the very end of stage 2.
+fi
+
+# ============================================================= AUTHELIA =====
+# FIRST in the services stage. Compose must never start Authelia against a
+# missing users database or a root-owned SQLite directory. Like Filebrowser,
+# .env is authoritative: every run re-hashes and re-applies the password.
+if run authelia; then
+  say "Rendering Authelia configuration and user database"
+
+  for _secret in AUTHELIA_JWT_SECRET AUTHELIA_SESSION_SECRET AUTHELIA_STORAGE_ENCRYPTION_KEY; do
+    if [[ -z "${!_secret:-}" || "${!_secret}" == changeme ]]; then
+      warn "$_secret is unset or still 'changeme' in $STACK/.env."
+      warn "Generate it on the Pi with: openssl rand -hex 32"
+      exit 1
+    fi
+  done
+
+  AUTHELIA_PASSWORD="${AUTHELIA_PASSWORD:-raspberry}"
+  _authelia_dir="$STACK/appdata/authelia"
+  _authelia_users="$_authelia_dir/users_database.yml"
+  _authelia_tmpl="$STACK/config/authelia-users.yml.tmpl"
+  install -d -o 1000 -g 1000 -m 0700 "$_authelia_dir"
+
+  # Extract the exact digest-pinned reference from Compose so password hashing
+  # and the daemon can never silently use different Authelia builds.
+  _authelia_img="$(sed -nE 's|^[[:space:]]*image:[[:space:]]*(authelia/authelia[^[:space:]]*).*|\1|p' \
+                    "$STACK/docker-compose.yml" | head -1)"
+  [[ -n "$_authelia_img" ]] || { warn "Could not find Authelia image pin in docker-compose.yml"; exit 1; }
+
+  # Explicit parameters match configuration.yml and the v4.39 defaults:
+  # Argon2id v19, 3 iterations, 64 MiB total memory, 4 lanes, 32-byte key,
+  # 16-byte salt. --password briefly exposes the value through the Docker API,
+  # consistent with this stack's documented env-secret posture; command output
+  # is captured and only the one-way digest is written.
+  _authelia_hash="$(docker run --rm "$_authelia_img" authelia crypto hash generate argon2 \
+      --variant argon2id --iterations 3 --memory 65536 --parallelism 4 \
+      --key-size 32 --salt-size 16 --password "$AUTHELIA_PASSWORD" \
+      | sed -n 's/^Digest: //p' | tail -1)"
+  [[ "$_authelia_hash" == '$argon2id$v=19$m=65536,t=3,p=4$'* ]] || {
+    warn "Authelia did not generate the expected Argon2id digest"; exit 1; }
+
+  sed -e "s|__AUTHELIA_PASSWORD_HASH__|$_authelia_hash|" \
+      -e "s|__CADDY_DOMAIN__|$CADDY_DOMAIN|" \
+      "$_authelia_tmpl" > "${_authelia_users}.new"
+  chown 1000:1000 "${_authelia_users}.new"
+  chmod 0600 "${_authelia_users}.new"
+  mv "${_authelia_users}.new" "$_authelia_users"
+  say "Authelia user database rendered (user: pi; .env password reapplied)"
 fi
 
 # ================================================================= STACK =====
@@ -1563,6 +1611,7 @@ cat <<EOF
   Endpoints — start at the dashboard, it links to everything else.
 
     Dashboard     https://home.$CADDY_DOMAIN/
+    Authelia      https://auth.$CADDY_DOMAIN/       (login + TOTP enrolment)
     Pi-hole       https://pihole.$CADDY_DOMAIN/
     Transmission  https://torrents.$CADDY_DOMAIN/
     Homebridge    https://homebridge.$CADDY_DOMAIN/
@@ -1581,6 +1630,7 @@ cat <<EOF
 
     :8084 dashboard  :9091 transmission  :8082 files
     :3552 arcane     :8083 paste         :8085 logs   :8086 metrics
+    :8087 authelia
 
   These two are host-networked and DO answer on $LAN_IP directly, subject to
   the ADMIN_SOURCES firewall tier:

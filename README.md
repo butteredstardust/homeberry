@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi%204-A22846?style=for-the-badge&logo=raspberrypi&logoColor=white)](https://www.raspberrypi.com/products/raspberry-pi-4-model-b/)
 [![Debian](https://img.shields.io/badge/Raspberry%20Pi%20OS-arm64-A81D33?style=for-the-badge&logo=debian&logoColor=white)](https://www.raspberrypi.com/software/operating-systems/)
-[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-12%20services-2496ED?style=for-the-badge&logo=docker&logoColor=white)](docker-compose.yml)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-13%20services-2496ED?style=for-the-badge&logo=docker&logoColor=white)](docker-compose.yml)
 [![Caddy](https://img.shields.io/badge/Caddy-DNS--01-1F88C0?style=for-the-badge&logo=caddy&logoColor=white)](https://caddyserver.com)
 [![Let's Encrypt](https://img.shields.io/badge/TLS-wildcard-003A70?style=for-the-badge&logo=letsencrypt&logoColor=white)](https://letsencrypt.org)
 [![Tailscale](https://img.shields.io/badge/Tailscale-optional-242424?style=for-the-badge&logo=tailscale&logoColor=white)](https://tailscale.com)
@@ -42,8 +42,8 @@ build manual and stops once the stack is up.
 
 ## 1. What you get
 
-Twelve services plus native Samba, grouped the way the dashboard groups them.
-(Fourteen containers in total: two are `docker-socket-proxy` instances with no
+Thirteen services plus native Samba, grouped the way the dashboard groups them.
+(Fifteen containers in total: two are `docker-socket-proxy` instances with no
 UI of their own — see §6.)
 
 | | Service | Image | Port | Purpose |
@@ -55,6 +55,7 @@ UI of their own — see §6.)
 | | [![MicroBin](https://img.shields.io/badge/MicroBin-6E4B9E?style=flat-square)](https://microbin.eu) | `danielszabo99/microbin` | `8083` | Paste text and small files between machines |
 | **Home** | [![Homebridge](https://img.shields.io/badge/Homebridge-491F59?style=flat-square&logo=homebridge&logoColor=white)](https://homebridge.io) | `homebridge/homebridge` | `8581` | HomeKit bridge. Host networking (mDNS) |
 | **Admin** | [![Pi-hole](https://img.shields.io/badge/Pi--hole-96060C?style=flat-square&logo=pihole&logoColor=white)](https://pi-hole.net) | `pihole/pihole` | `53`, `8080` | LAN DNS + ad blocking. Host networking (owns `:53`) |
+| | [Authelia](https://www.authelia.com/) | `authelia/authelia:4.39` | `8087` → `9091` | Forward-auth + mandatory TOTP for every admin vhost |
 | | [![Caddy](https://img.shields.io/badge/Caddy-1F88C0?style=flat-square&logo=caddy&logoColor=white)](https://caddyserver.com) | **built here** (`caddy/`) | `80`, `443` | Wildcard TLS for every UI in this table |
 | | [![Arcane](https://img.shields.io/badge/Arcane-0F766E?style=flat-square)](https://github.com/getarcaneapp/arcane) | `ghcr.io/getarcaneapp/manager` | `3552` | Docker web UI. **Root-equivalent** — treat as such |
 | | [![starbase-80](https://img.shields.io/badge/starbase--80-5B6478?style=flat-square)](https://github.com/notclickable-jordan/starbase-80) | `jordanroher/starbase-80` | `8084` | Dashboard linking to everything above |
@@ -164,6 +165,8 @@ flowchart LR
   `docker-compose.yml` declares `DUCKDNS_TOKEN:?`, so `docker compose up` **hard
   fails** without it. See §7 for why DuckDNS specifically.
 - A plex.tv account, if you want Plex.
+- A TOTP authenticator on a phone. Admin vhosts are intentionally unusable
+  through Caddy until user `pi` completes enrolment after the first start.
 
 **Router changes — three, all mandatory, but NOT all at the same time**
 
@@ -239,6 +242,8 @@ values cannot exist until the hub has been claimed after first boot.
 | `DOZZLE_PASSWORD` | `provision.sh` turns this into `appdata/dozzle/users.yml` (a bcrypt hash). **Dozzle will not start without that file.** Changing this key later does nothing on its own — regenerate the file |
 | `ARCANE_ENCRYPTION_KEY` | `openssl rand -hex 32`. Never rotate to fix a login — it decrypts stored registry credentials |
 | `ARCANE_JWT_SECRET` | `openssl rand -hex 32` |
+| `AUTHELIA_PASSWORD` | login for user `pi`; defaults to the knowingly shared LAN value `raspberry` and is re-applied by `provision.sh authelia` |
+| `AUTHELIA_JWT_SECRET` / `AUTHELIA_SESSION_SECRET` / `AUTHELIA_STORAGE_ENCRYPTION_KEY` | three independent values, each from `openssl rand -hex 32`; never rotate the storage key in place |
 | `DUCKDNS_TOKEN` | from duckdns.org. Can edit DNS for your subdomain and nothing else |
 | `BESZEL_KEY` / `BESZEL_TOKEN` | issued by Beszel's *Metrics → Add System*, which only exists **after** the stack is up. Leave them as-is for the first run; the `beszelagent` phase skips and tells you to re-run it. The key is public; the token is not |
 
@@ -325,19 +330,29 @@ then prints the router instructions.
 The `drive` phase stops and asks you to confirm the disk before it writes
 `/etc/fstab`. It will not proceed on a placeholder UUID.
 
-### After stage 2 — four things nothing can do for you
+### After stage 2 — five things nothing can do for you
 
-1. **Claim Beszel immediately** at `http://<LAN_IP>:8086`. The **first visitor
+1. **Enrol TOTP for Authelia.** Open `https://auth.<YOUR_DOMAIN>/`, sign in as
+   `pi` with `AUTHELIA_PASSWORD` from `.env`, request registration, then
+   print the filesystem notification:
+
+```bash
+ssh pi 'sudo cat /opt/pi-stack/appdata/authelia/notification.txt'
+```
+
+   Open the newest link and scan the QR code. Until this is complete every
+   admin vhost is deliberately blocked; use SSH plus loopback break-glass ports.
+2. **Claim Beszel immediately** at `http://<LAN_IP>:8086`. The **first visitor
    becomes the owner**. Then *Add System*, put the key and token in `.env`, and
    run `sudo bash provision.sh beszelagent` — the credentials are issued by the
    hub, so they cannot exist before this.
-2. **Change the first-run credentials**: Homebridge (`admin`/`admin`), Arcane
+3. **Change the first-run credentials**: Homebridge (`admin`/`admin`), Arcane
    (`arcane`/`arcane-admin`). Neither can be seeded from `.env` — Homebridge
    stores a PBKDF2 hash in `appdata/homebridge/auth.json` and has no key at all,
    and `ARCANE_PASSWORD` is only somewhere to write down what you chose.
-3. **Approve the subnet route and paste the ACL policy** in the Tailscale admin
+4. **Approve the subnet route and paste the ACL policy** in the Tailscale admin
    console, if you joined a tailnet. Neither is settable from the host.
-4. **Disable Transmission's UPnP begging.** The file does not exist until it has
+5. **Disable Transmission's UPnP begging.** The file does not exist until it has
    started once:
 
 ```bash
@@ -353,7 +368,7 @@ can never get through CGNAT.
 
 ```
 host      base drive perms docker native firewall tailscale samba dns
-services  stack arcane adlists backup maintenance quarterly watchdog heal
+services  authelia stack arcane adlists backup maintenance quarterly watchdog heal
           beszelagent diskguard fsck dnscutover
 ```
 
@@ -384,7 +399,7 @@ and fail there.
 ```bash
 cd /opt/pi-stack
 
-# 1. every Compose container up and healthy (12 of them)
+# 1. every Compose container up and healthy (15 of them)
 docker compose ps
 
 # Native Beszel collector (SMART history + host/container metrics)
@@ -407,28 +422,34 @@ echo | openssl s_client -connect 127.0.0.1:443 \
 #    one. "Caddy Local Authority" here means the name did not qualify as public
 #    (check CADDY_DOMAIN) rather than that ACME silently degraded.
 
-# 5. end-to-end through the proxy
+# 5. auth portal and forward-auth boundary
+curl -sf -o /dev/null -w '%{http_code}\n' https://auth.<YOUR_DOMAIN>/   # 200
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
+  https://files.<YOUR_DOMAIN>/                                          # redirect to auth.
+
+# 6. household bypass remains open
 curl -sf -o /dev/null -w '%{http_code}\n' https://home.<YOUR_DOMAIN>/
 
-# 6. memory limits are actually enforced (they are a silent no-op without the
+# 7. memory limits are actually enforced (they are a silent no-op without the
 #    cmdline change provision.sh makes — see docs/OPERATIONS.md §10)
 docker inspect starbase80 --format '{{.HostConfig.Memory}}'   # -> 1073741824
 
-# 7. firewall loaded, and Docker's own rules survived
+# 8. firewall loaded, and Docker's own rules survived
 sudo nft list table inet lanfw | head
 docker exec pihole true && echo "docker networking intact"
 
-# 8. timers armed
+# 9. timers armed
 systemctl list-timers 'pi-*' 'appdata-*'
 
-# 9. take a backup now and confirm it lands
+# 10. take a backup now and confirm it lands
 sudo systemctl start appdata-backup-core.service
 ls -lh "$DATA_ROOT"/backup/appdata/
 ```
 
-Expected HTTP codes through Caddy: `home.` 200, `pihole.` 302→200, `files.` 200,
-`paste.` 401, `torrents.` 302→401, `docker.` 200, `homebridge.` 200. The 401s are
-basic auth working, not a fault.
+Before login, `auth.` and `home.` return 200, `paste.` keeps its own 401,
+and every admin name redirects to `auth.`. After TOTP enrolment and login the
+seven admin names reach their existing service login; those logins remain in
+place as defence in depth.
 
 ---
 
@@ -482,6 +503,10 @@ wrong for any other threat model:
   one of two doors. Use an ssh tunnel for break-glass access
   (`ssh -N -L 8085:127.0.0.1:8085 pi@<ip>`). Setting `BIND_ADDR=0.0.0.0`
   restores the old behaviour and makes `ADMIN_SOURCES` decorative.
+- **Every admin vhost requires Authelia two-factor authentication.** The IP
+  allowlist still runs first, and each backend keeps its own login. If Authelia
+  is down those names fail closed with 502; SSH plus the loopback ports
+  (`8087` for the portal) are the break-glass path.
 - **Filebrowser exposes the whole drive at `/srv`, including the backups.**
   Anyone logged in can delete them. FileBrowser Quantum's multi-source config is
   how to narrow that.
@@ -622,6 +647,8 @@ reasoning and how to undo it.
 │  ├─ samba-tailscale-ordering.conf
 │  ├─ ssh-hardening.conf               → sshd_config.d/
 │  ├─ filebrowser-config.yaml
+│  ├─ authelia-configuration.yml       forward-auth policy, templated domain
+│  ├─ authelia-users.yml.tmpl          rendered with an Argon2id hash
 │  ├─ docker-socket-proxy-haproxy.cfg  upstream template + hard EXEC deny
 │  ├─ pihole-adlists.txt               declarative adlists -> gravity.db
 │  ├─ starbase80-config.json.tmpl      dashboard links; rendered by provision.sh
@@ -642,6 +669,7 @@ reasoning and how to undo it.
 │     └─ homeberry-dashboard.png  README screenshot
 └─ appdata/                     ALL MUTABLE STATE          (gitignored)
    ├─ pihole/etc/               config, gravity DB, adlists
+   ├─ authelia/                 users DB, SQLite TOTP state, notifications
    ├─ plex/                     library DB, watch state, metadata
    ├─ transmission/             settings.json, resume data
    ├─ filebrowser/              config.yaml + database.db

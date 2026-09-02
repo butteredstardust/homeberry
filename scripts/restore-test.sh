@@ -47,6 +47,7 @@ require_dir 'appdata/plex/Library/Application Support/Plex Media Server/Plug-in 
 require_dir 'appdata/homebridge/persist'
 require_file 'appdata/transmission/settings.json'
 require_file 'appdata/pihole/etc/pihole.toml'
+require_file 'appdata/authelia/users_database.yml'
 require_file 'appdata/beszel-agent/fingerprint'
 require_file '.env'
 
@@ -60,6 +61,7 @@ require_file '.env'
 # every database that backup-appdata.sh snapshots through the online API.
 SQLITE_DATABASES=(
   'appdata/arcane/arcane.db'
+  'appdata/authelia/db.sqlite3'
   'appdata/beszel/auxiliary.db'
   'appdata/beszel/data.db'
   'appdata/microbin/database.sqlite'

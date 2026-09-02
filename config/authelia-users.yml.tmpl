@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://www.authelia.com/schemas/v4.39/json-schema/user-database.json
+# Rendered by `provision.sh authelia`. AUTHELIA_PASSWORD in .env is
+# authoritative and is re-hashed on every run; never edit the rendered hash.
+users:
+  pi:
+    disabled: false
+    displayname: 'Pi Administrator'
+    password: '__AUTHELIA_PASSWORD_HASH__'
+    email: 'pi@__CADDY_DOMAIN__'
+    groups:
+      - 'admins'
