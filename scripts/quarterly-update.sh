@@ -108,7 +108,7 @@ health_ok() {
     curl -sf -o /dev/null -m 10 http://127.0.0.1:3552/api/health                         || ok=0
     # 401 is the healthy answer: MicroBin's index sits behind basic auth.
     curl -s  -o /dev/null -m 10 -w '%{http_code}' http://127.0.0.1:8083/ | grep -qE '^(200|401)$' || ok=0
-    # starbase80 rebuilds with Vite before nginx binds, so it is the slowest
+    # starbase80 rebuilds itself before nginx binds, so it is the slowest
     # thing here to answer after an image change — the retry loop covers it.
     # ⚠ 8084, not 80. Caddy owns :80 as of 2026-08-26.
     curl -sf -o /dev/null -m 10 http://127.0.0.1:8084/                                   || ok=0

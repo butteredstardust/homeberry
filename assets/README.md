@@ -14,6 +14,5 @@ has a mark and so the icon can be redrawn without going back to the design tool.
 The mark is a raspberry assembled out of stacked isometric blocks: thirteen containers on one small
 board, which is what `docker-compose.yml` describes.
 
-Sizing is deliberate. The dashboard logo renders at well under 100px, and the Pi rebuilds
-starbase80's Vite bundle on every container start — a 1024×1024 PNG would cost ~50 KB on every page
-load and in every nightly appdata backup, for pixels nobody sees.
+Sizing is deliberate. The dashboard logo renders at well under 100px, so a 1024×1024 PNG would cost
+~50 KB on every page load and in every nightly appdata backup, for pixels nobody sees.

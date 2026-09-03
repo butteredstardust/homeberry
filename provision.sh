@@ -788,6 +788,13 @@ PY
     fi
   fi
 
+  # One-time cleanup for stacks provisioned before the logo change. raspberry-pi.png
+  # left the download list below when the dashboard stopped pointing at it, and an
+  # unmanaged file is never removed by a loop that only ever adds. Named explicitly
+  # rather than pruning whatever is not in the list — that would eat icons someone
+  # added by hand for their own tiles.
+  rm -f "$STACK/appdata/starbase80/icons/raspberry-pi.png"
+
   # The dashboard logo is this project's own mark, so it ships in the repo instead
   # of coming from the icon CDN below. Copied unconditionally: it is ours to
   # overwrite, and a re-run after updating the artwork should actually update it.

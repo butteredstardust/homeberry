@@ -635,7 +635,10 @@ services:
       - ./appdata/starbase80/icons:/app/public/icons:ro
     environment:
       <<: *env
-      TITLE: ${LOCAL_HOSTNAME:-raspberrypi}
+      # NOT ${LOCAL_HOSTNAME}: that one is the machine's actual hostname — provision.sh
+      # feeds it to hostnamectl, Tailscale and Caddy's .local vhost — so renaming the
+      # dashboard through it would rename the Pi and break raspberrypi.local bookmarks.
+      TITLE: ${DASHBOARD_TITLE:-homeberry}
       # The project's own mark. provision.sh installs it from assets/homeberry-256.png;
       # the twelve service icons beside it are fetched once from the icon CDN instead.
       LOGO: /icons/homeberry.png
@@ -643,7 +646,7 @@ services:
       # Links open in the same tab. These are LAN tools reached from a bookmark,
       # not references to read alongside the page — new windows just pile up.
       NEWWINDOW: "false"
-    # ⚠ It runs a full Vite build (`npm run build`) on EVERY start, in the
+    # ⚠ It runs a full `npm run build` on EVERY start, in the
     # foreground, before nginx binds — ~9.4s on a warm, idle Pi 4. start_period
     # is 60s rather than 15s because at boot this competes with Plex's database
     # work and Pi-hole loading gravity. Marking it unhealthy early hands it to

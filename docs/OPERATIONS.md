@@ -262,6 +262,11 @@ sudo mv appdata appdata.broken                      # keep it, don't delete
 sudo cp -a .env .env.before-restore                 # current site config rollback
 sudo tar --same-owner -xzf /mnt/rpidata/backup/appdata/appdata-core-YYYYMMDD-HHMM.tar.gz -C /opt/pi-stack
 sudo chown -R beszel:beszel appdata/beszel-agent
+# The archive holds appdata as it was, so a snapshot older than an artwork change
+# restores an icons/ directory without the current dashboard logo. Nothing else in
+# this procedure runs provision.sh, and the healthcheck only proves nginx answers —
+# a missing logo restores "healthy" and looks fine until you open the page.
+sudo cp -f assets/homeberry-256.png appdata/starbase80/icons/homeberry.png
 docker compose up -d
 sudo systemctl start beszel-agent
 ```
@@ -808,7 +813,7 @@ v6 treats that as no override and retains an old router-forwarding entry.
 
 **Things that will bite you:**
 
-- **It runs a full Vite build (`npm run build`) at every start**, in the
+- **It runs a full `npm run build` at every start**, in the
   foreground, before nginx binds. Measured 9.4 s on this Pi 4. `start_period` is
   60 s so a slow boot is not mistaken for a failure and restarted into another
   build.
