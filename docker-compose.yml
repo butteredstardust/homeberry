@@ -636,7 +636,9 @@ services:
     environment:
       <<: *env
       TITLE: ${LOCAL_HOSTNAME:-raspberrypi}
-      LOGO: /icons/raspberry-pi.png
+      # The project's own mark. provision.sh installs it from assets/homeberry-256.png;
+      # the twelve service icons beside it are fetched once from the icon CDN instead.
+      LOGO: /icons/homeberry.png
       THEME: auto
       # Links open in the same tab. These are LAN tools reached from a bookmark,
       # not references to read alongside the page — new windows just pile up.

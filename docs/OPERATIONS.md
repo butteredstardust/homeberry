@@ -767,7 +767,7 @@ Added 2026-08-25 so nobody has to remember which port a service lives on.
 | Image | `jordanroher/starbase-80` v1.6.6, digest-pinned |
 | Port | **8084** on the host → 4173 in the container (nginx listens on 4173) |
 | Links | `appdata/starbase80/config.json`, mounted read-only — **rendered** by `provision.sh` from `config/starbase80-config.json.tmpl`; edit the template, not the output |
-| Icons | `appdata/starbase80/icons/`, 13 PNGs, ~400 KB, served locally |
+| Icons | `appdata/starbase80/icons/`, 13 PNGs, ~380 KB, served locally — 12 service icons fetched once from the icon CDN, plus `homeberry.png`, the logo, copied from `assets/` on every provision run |
 | Auth | **none** — it is a page of links; the firewall and "never forward" are the control |
 
 **Four names reach it, all now through Caddy:**

@@ -788,12 +788,19 @@ PY
     fi
   fi
 
-  # starbase80's icons are deliberately LOCAL rather than CDN-fetched, so the
-  # dashboard renders with no internet and makes no outbound requests per load.
-  # Thirteen files, ~400 KB, which also lands in the nightly appdata backup.
+  # The dashboard logo is this project's own mark, so it ships in the repo instead
+  # of coming from the icon CDN below. Copied unconditionally: it is ours to
+  # overwrite, and a re-run after updating the artwork should actually update it.
+  cp -f "$STACK/assets/homeberry-256.png" \
+        "$STACK/appdata/starbase80/icons/homeberry.png" \
+    || warn "  could not install the dashboard logo — starbase80 will show a broken image"
+
+  # starbase80's service icons are deliberately LOCAL rather than CDN-fetched, so
+  # the dashboard renders with no internet and makes no outbound requests per load.
+  # Twelve files, ~370 KB, which also lands in the nightly appdata backup.
   # Missing icons are not fatal — you get a broken image, not a broken page —
   # so a download failure only warns.
-  for _icon in pi-hole plex transmission filebrowser homebridge microbin arcane samba-server raspberry-pi authelia beszel dozzle tailscale; do
+  for _icon in pi-hole plex transmission filebrowser homebridge microbin arcane samba-server authelia beszel dozzle tailscale; do
     _dest="$STACK/appdata/starbase80/icons/${_icon}.png"
     [[ -s "$_dest" ]] && continue
     curl -sfL -m 20 -o "$_dest" \

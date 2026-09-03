@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/homeberry.png" alt="" width="128" height="128">
+
 # homeberry
 
 **A self-hosted household stack for a Raspberry Pi 4.**
