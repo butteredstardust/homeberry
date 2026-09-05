@@ -24,11 +24,10 @@
 
 ---
 
-This is a working setup, generalised. Every site-specific value is driven from
-`.env`; nothing is hardcoded to the machine it came from. The gotchas throughout
-were all hit in practice and are documented because each one cost hours.
+This is a general-purpose working setup. Set every site-specific value in
+`.env`. Do not hardcode site values elsewhere.
 
-The machine is defined by three things. Nothing is hand-configured outside them:
+Three items define the host. Do not configure the host outside these items:
 
 | | |
 |---|---|
@@ -36,17 +35,17 @@ The machine is defined by three things. Nothing is hand-configured outside them:
 | `provision.sh` | host setup — idempotent phases |
 | `appdata/` | all mutable state (gitignored; restored from backup) |
 
-**Running it already?** → **[docs/OPERATIONS.md](docs/OPERATIONS.md)** is the
-runbook: recovery, schedules, per-service gotchas, constraints. This file is the
-build manual and stops once the stack is up.
+**Already running it?** Read **[docs/OPERATIONS.md](docs/OPERATIONS.md)** for
+recovery, schedules, service limits, and daily operations. This file ends when
+the stack starts.
 
 ---
 
 ## 1. What you get
 
-Thirteen services plus native Samba, grouped the way the dashboard groups them.
-(Fifteen containers in total: two are `docker-socket-proxy` instances with no
-UI of their own — see §6.)
+The stack has thirteen services and native Samba. The dashboard uses these
+groups. Fifteen containers run in total. Two `docker-socket-proxy` containers
+have no UI. See [Security posture](#6-security-posture--read-this-before-you-deploy).
 
 | | Service | Image | Port | Purpose |
 |---|---|---|---|---|
@@ -65,24 +64,22 @@ UI of their own — see §6.)
 | | [![Dozzle](https://img.shields.io/badge/Dozzle-3A7BD5?style=flat-square)](https://dozzle.dev) | `amir20/dozzle` | `8085` | Live container logs |
 | | [![Diun](https://img.shields.io/badge/Diun-795548?style=flat-square)](https://crazymax.dev/diun/) | `crazymax/diun` | — | Notifies when an image goes stale |
 
-**The Port column is the container's own port, not a LAN address.** Everything
-except `53`, `80`, `443`, `8080`, `8581`, `32400` and Samba is published on
-`127.0.0.1` only (`BIND_ADDR`); the supported way in is
-`https://<service>.<your-domain>` through Caddy. See §6.
+**The Port column shows the container port. It does not show a LAN address.**
+Only `53`, `80`, `443`, `8080`, `8581`, `32400`, and Samba publish beyond
+`127.0.0.1` (`BIND_ADDR`). Use `https://<service>.<your-domain>` through Caddy.
+See [Security posture](#6-security-posture--read-this-before-you-deploy).
 
-Plus, from `provision.sh`: nftables firewall, Tailscale (subnet router, optional),
-nine Pi-hole adlists, nightly + weekly backups with an off-box pull, a container
-watchdog, disk/SMART/thermal guard, scheduled `e2fsck`, and a quarterly update
-job with automatic rollback.
+`provision.sh` creates the nftables firewall and optional Tailscale subnet
+router. It also creates nine Pi-hole adlists, backups, monitoring guards,
+scheduled `e2fsck`, and a quarterly update job with rollback.
 
-**All images are pinned by digest.** Caddy is the one exception — it is built
-here, because the official image ships no DNS provider modules, so its pin is the
-`CADDY_VERSION` build arg.
+**All images use digest pins.** Caddy is built locally because the official
+image has no DNS provider modules. Its build pin is `CADDY_VERSION`.
 
 ### How it fits together
 
-Two paths, and the certificate one is why this works at all: **nothing ever
-connects *in* from the internet.**
+The stack has two access paths. **Nothing accepts an inbound internet
+connection.** DNS-01 provides the certificate path.
 
 ```mermaid
 flowchart LR
@@ -127,13 +124,13 @@ flowchart LR
     TS --> SMB
 ```
 
-The awkward part is step 3. Behind CGNAT, Let's Encrypt can never reach port 80
-here, so the usual HTTP challenge is impossible. DNS-01 proves control of the
-*name* instead, which needs no inbound connection — see [§7.1](#71-https-works-because-of-dns-01-not-because-anything-is-exposed).
+Step 3 writes the DNS proof. CGNAT prevents Let's Encrypt from reaching port 80.
+DNS-01 proves control of the *name* without an inbound connection. See
+[docs/DECISIONS.md](docs/DECISIONS.md#https-works-because-of-dns-01-not-because-anything-is-exposed).
 
 ### Where state lives, and how it survives
 
-The SD card holds everything mutable and is the thing most likely to die.
+The SD card stores all mutable state. It is the most likely storage failure.
 
 ```mermaid
 flowchart LR
@@ -151,64 +148,58 @@ flowchart LR
 
 **Hardware**
 
-- Raspberry Pi 4B, 4 GB. **64-bit Raspberry Pi OS Lite**, Debian 12 or 13.
-  `provision.sh` refuses to continue on a non-arm64 userland.
-- A USB disk for media, formatted **ext4**. **Required at build time** —
-  `provision.sh drive` exits if it is not mounted, because every path below it
-  depends on it. It is mounted `nofail`, so the Pi still boots and keeps serving
-  DNS if the disk dies later; that is a different situation from not having one.
-- The SD card holds `appdata/`, including Plex's SQLite DB. That is the main
-  wear source and the reason the nightly backup is load-bearing. A USB SSD is
-  the better answer if you have one.
+- Raspberry Pi 4B, 4 GB. Use **64-bit Raspberry Pi OS Lite**, Debian 12 or 13.
+  `provision.sh` stops on a non-arm64 userland.
+- Use an **ext4** USB disk for media. It is **required during the build**.
+  `provision.sh drive` stops if it is not mounted. All paths below depend on it.
+  The `nofail` mount lets the Pi boot and serve DNS after a later disk failure.
+- The SD card stores `appdata/`, including the Plex SQLite DB. This causes the
+  most wear. A USB SSD reduces that risk.
 
 **Accounts, before you start**
 
-- A **DuckDNS** domain (free) and its token — required for HTTPS.
-  `docker-compose.yml` declares `DUCKDNS_TOKEN:?`, so `docker compose up` **hard
-  fails** without it. See §7 for why DuckDNS specifically.
+- A **DuckDNS** domain and token are required for HTTPS.
+  `docker-compose.yml` declares `DUCKDNS_TOKEN:?`. `docker compose up` **fails**
+  without it. See [docs/DECISIONS.md](docs/DECISIONS.md) for the DuckDNS choice.
 - A plex.tv account, if you want Plex.
-- A TOTP authenticator on a phone. Admin vhosts are intentionally unusable
-  through Caddy until user `pi` completes enrolment after the first start.
+- A TOTP authenticator on a phone. Caddy blocks admin vhosts until user `pi`
+  completes enrolment after the first start.
 
 **Router changes — three, all mandatory, but NOT all at the same time**
 
-⚠ Only the first is done up front. Doing 2 and 3 early is the single most
-common way to make this build fail confusingly: it takes DNS away from the
-machine that is still installing packages and pulling images.
+⚠ Do only step 1 before the build. Steps 2 and 3 remove DNS from a host that
+still installs packages and pulls images.
 
 1. **Before you start:** a **DHCP reservation** pinning the Pi to a fixed
-   address. The address is not configured on the Pi itself, so a reimaged Pi
-   returns on the same IP.
+   address. Do not configure this address on the Pi. A reimaged Pi returns with
+   the same IP.
 2. **After stage 2, once Pi-hole is verified:** set the **DNS handed to clients
-   = the Pi's address.** This is what makes Pi-hole the LAN resolver.
+   = the Pi's address.** This makes Pi-hole the LAN resolver.
 3. **At the same time:** **remove any secondary DNS entry.** A second resolver
-   silently breaks every Pi-hole-only name — `dig` still looks fine, because it
-   queries only the first, while macOS `getaddrinfo` races both and takes the
-   other one's NXDOMAIN. See [docs/OPERATIONS.md](docs/OPERATIONS.md) §7.3.
+   silently breaks Pi-hole-only names. `dig` queries only the first resolver.
+   macOS `getaddrinfo` races both and can use the other NXDOMAIN. See
+   [docs/services/apps.md](docs/services/apps.md#dashboard-starbase-80).
 
-⚠ Consequence of 2 and 3: **Pi-hole becomes a single point of failure for
-household DNS, with no fallback.** That is deliberate — a fallback that resolves
-*some* names is worse to debug than none — but it means Pi-hole downtime takes
-the internet down for everyone in the house. Before planned downtime, point the
-router's DNS at `1.1.1.1`.
+⚠ Steps 2 and 3 make **Pi-hole the single point of failure for household DNS.**
+There is no fallback resolver. Pi-hole downtime stops internet access for the
+household. Before planned downtime, set the router DNS to `1.1.1.1`.
 
 **Do not port-forward anything.** Not `80`, `443`, `9091`, `3552`, `8082`,
-`8083`, `8085`, `8086`. See §7.3. If you want these from outside the house, that
-is what Tailscale is for ([docs/OPERATIONS.md](docs/OPERATIONS.md) §7.7) — never
-a port forward.
+`8083`, `8085`, `8086`. See [docs/DECISIONS.md](docs/DECISIONS.md#tls-is-not-authorisation--never-forward-these-ports). If you want these from outside the house,
+use Tailscale ([docs/services/network.md](docs/services/network.md#tailscale-remote-access)). Never use a port forward.
 
 ---
 
 ## 3. Configuration
 
-Everything site-specific lives in `.env`. There is nothing to edit in the scripts
-or in `docker-compose.yml`.
+Set all site-specific values in `.env`. Do not edit scripts or
+`docker-compose.yml`.
 
 ```bash
 cp .env.example .env && chmod 600 .env
 ```
 
-**Site values — set these before the first run:**
+**Set these site values before the first run:**
 
 | Key | Default | Notes |
 |---|---|---|
@@ -227,10 +218,9 @@ cp .env.example .env && chmod 600 .env
 | `TAILSCALE_AUTHKEY` | *blank* | **Optional.** Blank = stay LAN-only. Tailscale and its host settings are installed either way |
 | `DOCKER_GID` | `985` | `provision.sh` derives the real one with `getent group docker` and rewrites this |
 
-**Secrets** — all `changeme` in `.env.example`. Required before the first run,
-with three exceptions called out in the table: `TAILSCALE_AUTHKEY` is optional,
-`ARCANE_PASSWORD` is record-only (nothing reads it), and the two `BESZEL_*`
-values cannot exist until the hub has been claimed after first boot.
+**Secrets:** Replace every `changeme` value in `.env.example` before the first
+run. `TAILSCALE_AUTHKEY` is optional. `ARCANE_PASSWORD` is record-only. Create
+the two `BESZEL_*` values after you claim the hub.
 
 | Key | How to set it |
 |---|---|
@@ -255,107 +245,101 @@ printf 'ARCANE_ENCRYPTION_KEY=%s\nARCANE_JWT_SECRET=%s\n' \
   "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" | sudo tee -a /opt/pi-stack/.env
 ```
 
-⚠ Set `DUCKDNS_TOKEN` in a way that does not leave it in shell history, and
-verify it is non-empty — an empty value fails compose validation in a way that
-reads like a missing key:
+⚠ Set `DUCKDNS_TOKEN` without recording it in shell history. Verify that it is
+non-empty. An empty value fails compose validation as a missing key:
 
 ```bash
 ssh -t pi 'read -rsp "DuckDNS token: " t && \
   sudo sed -i "s|^DUCKDNS_TOKEN=.*|DUCKDNS_TOKEN=$t|" /opt/pi-stack/.env && echo && echo saved'
 ```
 
-**One value is not in `.env`:** the Tailscale ACL policy
-(`config/tailscale-policy.hujson.example`) is **pasted into the Tailscale admin
-console**, not deployed by anything here. Replace its placeholders by hand. See
-[docs/OPERATIONS.md](docs/OPERATIONS.md) §7.7.3.
+**One value is not in `.env`:** Paste the Tailscale ACL policy
+(`config/tailscale-policy.hujson.example`) into the Tailscale admin console.
+Nothing deploys it. Replace its placeholders manually. See
+[docs/services/network.md](docs/services/network.md#access-control-acls).
 
 ---
 
 ## 4. Build
 
 ```bash
-# 1. Flash Raspberry Pi OS Lite (64-bit) with Imager.
-#    Advanced options: set hostname, user `pi`, and your SSH public key.
-#    Verify after boot:  dpkg --print-architecture   -> arm64
+# 1. Use Imager to flash Raspberry Pi OS Lite (64-bit).
+#    Set the hostname, user `pi`, and SSH public key in Advanced options.
+#    After boot, verify:  dpkg --print-architecture   -> arm64
 
-# 2. Format the data drive (skip if reusing an existing ext4 disk).
-#    ⚠ mkfs is irreversible. /dev/sdX is assigned in USB enumeration order, so
-#    it is NOT a stable name — check MODEL and SERIAL, not just size.
+# 2. ⚠ This command removes all data on the selected drive. Skip this step when
+#    reusing an ext4 disk. `mkfs` is irreversible. `/dev/sdX` changes with USB
+#    enumeration. Check MODEL and SERIAL. Do not check size only.
 lsblk -o NAME,PATH,SIZE,MODEL,SERIAL,FSTYPE,LABEL,MOUNTPOINTS
 
-DATA_DEVICE=/dev/sdX1                  # set only after reading the above
+DATA_DEVICE=/dev/sdX1                  # Set this only after you check the list.
 findmnt --source "$DATA_DEVICE" && { echo "REFUSING: device is mounted"; false; }
 sudo mkfs.ext4 -L RPIDATA "$DATA_DEVICE"
 
-# 3. Copy the repo to the Pi, from your workstation.
-#    rsync, not `scp -r ./*` — that glob silently drops dotfiles, so
-#    .env.example never arrives and step 4 fails on a missing file.
+# 3. Copy the repository from the workstation to the Pi.
+#    ⚠ Do not use `scp -r ./*`. It silently drops dotfiles. Then
+#    `.env.example` is absent and step 4 fails.
 ssh pi@<PI_IP> 'sudo mkdir -p /opt/pi-stack && sudo chown pi:pi /opt/pi-stack'
 rsync -a --exclude='.git/' ./ pi@<PI_IP>:/opt/pi-stack/
 
-# 4. Configuration and secrets — on the Pi
+# 4. Set configuration and secrets on the Pi.
 cd /opt/pi-stack
 cp .env.example .env && chmod 600 .env
-vim .env                               # see §3
+vim .env                               # See section 3.
 
-# 5. STAGE 1 — host setup. ~15 min.
+# 5. Run STAGE 1 for host setup. ~15 min.
 sudo bash provision.sh host
 
-# 6. Reboot. NOT optional — see below.
+# 6. Reboot. This is mandatory. See below.
 sudo reboot
 
-# 7. STAGE 2 — reconnect, then start the stack and install the timers.
-#    First run BUILDS Caddy: ~6 min on a Pi 4. Adlists add several more.
+# 7. Reconnect. Run STAGE 2 to start the stack and install timers.
+#    The first run BUILDS Caddy: ~6 min on a Pi 4. Adlists add more time.
 cd /opt/pi-stack && sudo bash provision.sh services
 ```
 
-⚠ **The reboot between stages is mandatory.** Three things set up in stage 1
-only take effect at boot, and all three affect containers *created before* it:
+⚠ **The reboot between stages is mandatory.** Stage 1 creates three settings
+that apply only after boot. Each setting affects containers created before boot:
 
-- `cgroup_enable=memory` is appended to the kernel command line. Until reboot,
-  every `mem_limit:` is **silently discarded** — `docker inspect` reports
-  `Memory=0` and the container runs unlimited.
-- AppArmor only confines containers created after it is active.
-- `pi` is added to the `docker` group, and group membership is granted at
-  **login** — the session that ran stage 1 does not have it, so the first
-  un-sudoed `docker compose` fails on the socket.
+- `cgroup_enable=memory` is added to the kernel command line. Before reboot,
+  every `mem_limit:` is **silently discarded**. `docker inspect` reports
+  `Memory=0`. The container has no memory limit.
+- AppArmor confines only containers created after AppArmor is active.
+- `pi` joins the `docker` group at **login**. The stage 1 session lacks that
+  membership. Its first un-sudoed `docker compose` fails on the socket.
 
-There is deliberately no `all` stage. It would produce a stack that looks
-correct and has no memory limits.
+There is no `all` stage. It would create a stack without memory limits.
 
-**Do not change the router's DNS until stage 2 tells you to.** Pointing clients
-at an unprovisioned Pi takes DNS away from the machine that is mid-install —
-`apt`, image pulls and the Caddy build all need it. The `dnscutover` phase runs
-last, verifies Pi-hole actually answers before touching the host resolver, and
-then prints the router instructions.
+**Do not change the router DNS until stage 2 tells you.** An unprovisioned Pi
+cannot provide DNS during installation. `apt`, image pulls, and the Caddy build
+need DNS. `dnscutover` runs last. It verifies Pi-hole before it changes the host
+resolver. It then prints router instructions.
 
-The `drive` phase stops and asks you to confirm the disk before it writes
-`/etc/fstab`. It will not proceed on a placeholder UUID.
+The `drive` phase requires disk confirmation before it writes `/etc/fstab`.
+It stops on a placeholder UUID.
 
 ### After stage 2 — five things nothing can do for you
 
 1. **Enrol TOTP for Authelia.** Open `https://auth.<YOUR_DOMAIN>/`, sign in as
-   `pi` with `AUTHELIA_PASSWORD` from `.env`, request registration, then
-   print the filesystem notification:
+   `pi` with `AUTHELIA_PASSWORD` from `.env`. Request registration. Then print
+   the filesystem notification:
 
 ```bash
 ssh pi 'sudo cat /opt/pi-stack/appdata/authelia/notification.txt'
 ```
 
-   Open the newest link and scan the QR code. Until this is complete every
-   admin vhost is deliberately blocked; use SSH plus loopback break-glass ports.
+   Open the newest link. Scan the QR code. Until you complete this task, every
+   admin vhost is blocked. Use SSH and loopback break-glass ports.
 2. **Claim Beszel immediately** at `http://<LAN_IP>:8086`. The **first visitor
-   becomes the owner**. Then *Add System*, put the key and token in `.env`, and
-   run `sudo bash provision.sh beszelagent` — the credentials are issued by the
-   hub, so they cannot exist before this.
+   becomes the owner**. Select *Add System*. Put the key and token in `.env`.
+   Run `sudo bash provision.sh beszelagent`. The hub issues these credentials.
 3. **Change the first-run credentials**: Homebridge (`admin`/`admin`), Arcane
-   (`arcane`/`arcane-admin`). Neither can be seeded from `.env` — Homebridge
-   stores a PBKDF2 hash in `appdata/homebridge/auth.json` and has no key at all,
-   and `ARCANE_PASSWORD` is only somewhere to write down what you chose.
-4. **Approve the subnet route and paste the ACL policy** in the Tailscale admin
-   console, if you joined a tailnet. Neither is settable from the host.
-5. **Disable Transmission's UPnP begging.** The file does not exist until it has
-   started once:
+   (`arcane`/`arcane-admin`). Do not seed either from `.env`. Homebridge stores
+   a PBKDF2 hash in `appdata/homebridge/auth.json`. `ARCANE_PASSWORD` only
+   records the password you select.
+4. **Approve the subnet route.** Paste the ACL policy in the Tailscale admin
+   console if you joined a tailnet. The host cannot set either item.
+5. **Disable Transmission UPnP.** The file exists only after the first start:
 
 ```bash
 docker compose stop transmission
@@ -363,10 +347,11 @@ sudo vim appdata/transmission/settings.json    # "port-forwarding-enabled": fals
 docker compose start transmission
 ```
 
-The default is `true`, which makes Transmission ask the router for a mapping it
-can never get through CGNAT.
+The default is `true`. Transmission then asks the router for a mapping that
+CGNAT cannot provide.
 
-**Phases**, each idempotent and re-runnable alone (`sudo bash provision.sh dns`):
+**Phases:** Each phase is idempotent. Run a phase alone with
+`sudo bash provision.sh dns`.
 
 ```
 host      base drive perms docker native firewall tailscale samba dns
@@ -374,7 +359,7 @@ services  authelia stack arcane adlists backup maintenance quarterly watchdog he
           beszelagent diskguard fsck dnscutover
 ```
 
-**Off-box backups** — install once on a machine that is usually on:
+**Off-box backups:** Install once on a workstation that is usually on:
 
 ```bash
 cd mac
@@ -386,13 +371,12 @@ launchctl start com.example.pi-backup-pull
 tail ~/Library/Logs/pi-backup-pull.log
 ```
 
-launchd does not expand `~` or `$HOME` inside a plist, which is why the template
-carries absolute paths and has to be rendered rather than copied.
+launchd does not expand `~` or `$HOME` inside a plist. Render the template with
+absolute paths. Do not copy it directly.
 
-The workstation **pulls**, so the Pi holds no credentials for it.
-`pull-backups.sh` uses plain `-a` and `date "+%Y-%m-%dT%H:%M:%S%z"` because macOS
-ships **openrsync** and BSD `date`; `--info=stats1` and `date -Is` are GNU-only
-and fail there.
+The workstation **pulls** backups. The Pi stores no workstation credentials.
+`pull-backups.sh` uses plain `-a` and `date "+%Y-%m-%dT%H:%M:%S%z"`. macOS ships
+**openrsync** and BSD `date`. `--info=stats1` and `date -Is` require GNU tools.
 
 ---
 
@@ -433,7 +417,7 @@ curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' \
 curl -sf -o /dev/null -w '%{http_code}\n' https://home.<YOUR_DOMAIN>/
 
 # 7. memory limits are actually enforced (they are a silent no-op without the
-#    cmdline change provision.sh makes — see docs/OPERATIONS.md §10)
+#    cmdline change provision.sh makes — see docs/OPERATIONS.md#10-constraints)
 docker inspect starbase80 --format '{{.HostConfig.Memory}}'   # -> 1073741824
 
 # 8. firewall loaded, and Docker's own rules survived
@@ -448,187 +432,89 @@ sudo systemctl start appdata-backup-core.service
 ls -lh "$DATA_ROOT"/backup/appdata/
 ```
 
-Before login, `auth.` and `home.` return 200, `paste.` keeps its own 401,
-and every admin name redirects to `auth.`. After TOTP enrolment and login the
-seven admin names reach their existing service login; those logins remain in
-place as defence in depth.
+Before login, `auth.` and `home.` return 200. `paste.` keeps its own 401.
+Every admin name redirects to `auth.`. After TOTP enrolment and login, the
+seven admin names reach their service login. Keep those logins as defence in
+depth.
 
 ---
 
 ## 6. Security posture — read this before you deploy
 
-This stack is designed for a **LAN-only box behind CGNAT**, reachable remotely
-only over Tailscale. Several deliberate trade-offs follow from that, and they are
-wrong for any other threat model:
+This stack is for a **LAN-only host behind CGNAT**. Use Tailscale for remote
+access only. These choices are wrong for another threat model:
 
-- **Arcane's login is still root-equivalent, even behind the socket proxy.** No
-  container mounts `/var/run/docker.sock` directly; Arcane, Dozzle and Diun each
-  talk to a [`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
-  with a per-endpoint allowlist (`EXEC` off for both, `POST` off for the
-  read-only one). That removes the easy paths, not the class: anything that can
-  create a container can create one with `/` mounted. Set `SOCKET_PROXY_POST=0`
-  to make Arcane read-only if you only want the dashboard. Give it your
-  strongest password either way.
-- **Diun is the automatic image-update monitor.** Arcane's hourly image polling
-  is disabled in its persistent settings to avoid duplicate registry lookups;
-  Arcane's manual check remains available. Digest changes still go through the
-  backed-up, health-gated quarterly updater.
-- **MicroBin's `/upload/<id>` and `/raw/<id>` return full paste content with no
-  credentials.** Only `/`, `/admin` and `/pastalist` are behind basic auth. That
-  is upstream behaviour and is what makes links shareable. **Never paste secrets
-  into it.**
-- **Pi-hole is a single point of failure for household DNS**, with no fallback
-  resolver, by design (§2).
-- **LAN defence is opt-in, and ships off.** There are two tiers. The outer one
-  drops every non-private source and is always on — that is the mis-clicked
-  port forward. The inner one restricts the admin surface to `ADMIN_SOURCES`,
-  and its shipped default is all of RFC1918, i.e. exactly as permissive as the
-  outer tier. **Until you narrow it, a compromised TV or IoT bulb on your LAN
-  has the same access you do.** Narrowing it to your workstation is one line in
-  `.env` and covers both halves:
+- **Arcane login remains root-equivalent behind the socket proxy.** No container
+  mounts `/var/run/docker.sock` directly. Arcane, Dozzle, and Diun use a
+  [`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
+  with endpoint allowlists. `EXEC` is off for both proxies. `POST` is off for
+  the read-only proxy. A service that can create a container can mount `/`.
+  Set `SOCKET_PROXY_POST=0` to make Arcane read-only. Use your strongest
+  password either way.
+- **Diun monitors image updates automatically.** Arcane image polling is off
+  in persistent settings. This prevents duplicate registry checks. You can run
+  the Arcane check manually. The quarterly updater changes digests after backup
+  and health checks.
+- **MicroBin `/upload/<id>` and `/raw/<id>` return full paste content without
+  credentials.** Only `/`, `/admin`, and `/pastalist` use basic auth. This is
+  upstream behavior and makes links shareable. **Never paste secrets into it.**
+- **Pi-hole is the single failure point for household DNS.** It has no fallback
+  resolver. See [Requirements](#2-requirements).
+- **LAN defence is opt-in and starts off.** The outer tier drops every
+  non-private source. It is always on and blocks an accidental port forward.
+  The inner tier limits admin access with `ADMIN_SOURCES`. Its default is all
+  RFC1918 addresses. **Until you narrow it, a compromised TV or IoT bulb has
+  the same access as you.** Set the workstation in `.env` to limit both tiers:
 
   | | Enforced by | Covers |
   |---|---|---|
   | Layer 4 | `config/nftables.conf` `$admin_sources` | `22` SSH, `8080` Pi-hole, `8581` Homebridge |
   | Layer 7 | `Caddyfile` `(adminonly)` | `pihole` `files` `torrents` `docker` `homebridge` `logs` `metrics` vhosts |
 
-  Caddy has to do the second half because every vhost arrives on the same
-  `:443` and is indistinguishable below layer 7. The tailnet is always admin —
-  nftables admits `tailscale0` by interface, Caddy allows `100.64.0.0/10`. Left
-  open on purpose: the dashboard, the pastebin, Plex, DNS, Samba, BitTorrent.
+  Caddy performs the second tier. Every vhost arrives on `:443` and layer 4
+  cannot distinguish them. The tailnet is always admin. nftables admits
+  `tailscale0` by interface. Caddy allows `100.64.0.0/10`. These remain open:
+  dashboard, pastebin, Plex, DNS, Samba, and BitTorrent.
 
-  This is a **reachability tier, not authentication** — every service keeps its
-  own password. And read the deadman-switch note in `.env.example` before you
-  narrow it: there is no serial console on a Pi.
-- **Admin UIs are not reachable on the LAN by port number.** `BIND_ADDR`
-  publishes them on `127.0.0.1` only, so Caddy is a real chokepoint rather than
-  one of two doors. Use an ssh tunnel for break-glass access
-  (`ssh -N -L 8085:127.0.0.1:8085 pi@<ip>`). Setting `BIND_ADDR=0.0.0.0`
-  restores the old behaviour and makes `ADMIN_SOURCES` decorative.
+  This is a **reachability tier, not authentication**. Every service has its
+  own password. Read the deadman-switch note in `.env.example` before you
+  narrow access. A Pi has no serial console.
+- **Admin UIs have no LAN port access.** `BIND_ADDR` publishes them only on
+  `127.0.0.1`. Caddy is the access chokepoint. Use an ssh tunnel for break-glass
+  access (`ssh -N -L 8085:127.0.0.1:8085 pi@<ip>`). `BIND_ADDR=0.0.0.0` makes
+  `ADMIN_SOURCES` decorative.
 - **Every admin vhost requires Authelia two-factor authentication.** The IP
-  allowlist still runs first, and each backend keeps its own login. If Authelia
-  is down those names fail closed with 502; SSH plus the loopback ports
-  (`8087` for the portal) are the break-glass path.
-- **Filebrowser exposes the whole drive at `/srv`, including the backups.**
-  Anyone logged in can delete them. FileBrowser Quantum's multi-source config is
-  how to narrow that.
-- **Dozzle shows container logs**, which routinely contain environment dumps and
-  tokens in stack traces. A session there is close to reading `.env`.
-- **Beszel's hub makes the first visitor the owner** until an admin account
-  exists. Complete its first-run before anything else can reach it.
-- **The `pi` account and every member of the host `docker` group are
-  root-equivalent.** `provision.sh` adds both `pi` and the native `beszel` agent
-  to that group, and docker-group access is enough to start a privileged
-  container with the host filesystem mounted. Protect the SSH key accordingly,
-  and treat a compromise of the Beszel agent as a host compromise.
-- **Several services set their own credentials on first run and are wide open
-  until you do.** Homebridge starts at `admin`/`admin`, Arcane at
-  `arcane`/`arcane-admin`, and Beszel makes **the first visitor the owner**.
-  Complete all three before any other device on the LAN can reach the box.
-- **A shared password across services is a simplification, not a recommendation.**
-  It is defensible only while the box stays LAN-only and holds nothing you would
-  miss. Use distinct passwords if either stops being true.
+  allowlist runs first. Each backend keeps its own login. If Authelia fails,
+  these names fail closed with 502. Use SSH and loopback ports for break-glass
+  access. The portal uses `8087`.
+- **Filebrowser exposes the complete drive at `/srv`, including backups.** Any
+  logged-in user can remove them. Use FileBrowser Quantum multi-source config
+  to limit access.
+- **Dozzle shows container logs.** Logs can contain environment dumps and stack
+  trace tokens. A Dozzle session is close to reading `.env`.
+- **Beszel makes the first visitor the owner** until an admin account exists.
+  Complete the first run before another device reaches it.
+- **The `pi` account and every host `docker` group member are root-equivalent.**
+  `provision.sh` adds `pi` and the native `beszel` agent to that group. Docker
+  group access can start a privileged container with the host filesystem
+  mounted. Protect the SSH key. Treat a Beszel agent compromise as host
+  compromise.
+- **Several services have first-run credentials and are open until you change
+  them.** Homebridge starts as `admin`/`admin`. Arcane starts as
+  `arcane`/`arcane-admin`. Beszel makes **the first visitor the owner**. Complete
+  all three before another LAN device reaches the host.
+- **A shared service password is a simplification, not a recommendation.** Use
+  distinct passwords if the host is not LAN-only or stores valuable data.
 
-Everything above is *why* §7.3's rule has no exceptions.
+This is why the rule in [docs/DECISIONS.md](docs/DECISIONS.md#tls-is-not-authorisation--never-forward-these-ports) has no exceptions.
 
 ---
 
 ## 7. Decisions to understand before you build
 
-Five choices here are non-obvious and expensive to reverse. Everything else is
-in [docs/OPERATIONS.md](docs/OPERATIONS.md).
-
-### 7.1 HTTPS works because of DNS-01, not because anything is exposed
-
-This box has **no inbound connectivity** — the ISP uses CGNAT. It still gets a
-publicly-trusted certificate, via two independent tricks:
-
-1. `*.yourdomain.duckdns.org` is a **public DNS record pointing at a private
-   address**. Public name, private destination. Publishing a name costs nothing
-   and exposes nothing; only devices already inside the house can reach it.
-2. The certificate is issued over **DNS-01**, which proves control of the *name*
-   by writing a TXT record — not control of a reachable server. Let's Encrypt
-   never connects to the Pi. **HTTP-01 can never work here.**
-
-**This is why the provider must be DuckDNS** (or another with a TXT API).
-DynDNS, No-IP and most ISP DDNS offerings expose an A record only, and are
-useless for this.
-
-**Using a different DNS provider** is a fork point, not a setting: change the
-plugin in `caddy/Dockerfile` (it is compiled in with xcaddy) and the `tls dns
-<provider>` directive in the `Caddyfile`. The Dockerfile asserts the plugin
-linked in, because otherwise the failure happens at runtime, after `:80`/`:443`
-are already bound.
-
-### 7.2 One wildcard certificate, one Caddyfile site block
-
-**Do not give each service its own site block.** DuckDNS stores exactly **one
-TXT record per account**. Seven site blocks make Caddy order seven certificates
-whose DNS-01 challenges overwrite each other's TXT record; they fail, retry, and
-can exhaust Let's Encrypt's limit of **5 failed validations per hour**. Every
-service is a `handle` inside a single `*.DOMAIN` block for this reason.
-
-The `Caddyfile` carries the full reasoning inline. Read it before editing it.
-
-### 7.3 TLS is not authorisation — never forward these ports
-
-A trusted certificate encrypts the connection. It adds **no access control**.
-This is the one rule in this repo with no exceptions:
-
-| Port | Why forwarding it is unrecoverable |
-|---|---|
-| `3552` Arcane | controls every container → **root-equivalent on the host**. Can stop DNS for the house, read `.env`, delete backups |
-| `8082` Filebrowser | whole drive at `/srv`, **including the backups** |
-| `9091` Transmission | RPC whitelist is disabled; a shared password is all that stands there |
-| `8083` MicroBin | `/raw/<id>` returns full content with **no credentials** — upstream behaviour, not configurable |
-| `8085` Dozzle | container logs contain environment dumps and tokens in stack traces — a session here is **equivalent to reading `.env`** |
-| `8086` Beszel | **the first visitor becomes the owner** until an admin account exists, and it inventories the whole host |
-| `80` `443` Caddy | the front door to all of the above |
-
-Two things reduce the blast radius of a mistake here, and neither is the
-control: the nftables firewall drops non-RFC1918 sources, and `BIND_ADDR` means
-most of the ports in that table are not even listening on the LAN — a forward
-of `8082` lands on a closed port. Only `80`/`443` (Caddy), `8080`, `8581`,
-`32400` and `51413` are bound LAN-wide at all. **Forwarding `443` still exposes
-everything in the table**, which is why the rule has no exceptions.
-
-Narrowing `ADMIN_SOURCES` is what defends against a compromised device on your
-own LAN; by default that device is inside the allowed set (§6).
-
-Under CGNAT a forward would not work anyway. **Do not let that be the reason it
-stays closed** — CGNAT is the ISP's decision to reverse, not yours.
-
-### 7.4 Updates are gated, never continuous
-
-`quarterly-update.sh` takes a full backup, simulates the apt upgrade and skips it
-if it wants to *remove* anything, re-pins each image to the current digest of its
-own channel tag, health-checks everything for 5 minutes, and **restores the
-previous compose file and images automatically on any failure.**
-
-**Do not add Watchtower.** Not automatic-vs-manual: it pulls continuously with no
-backup, no health gate and no way back, so a bad image leaves the house without
-DNS until somebody notices.
-
-### 7.5 DNS bypass cannot be enforced from the Pi
-
-If the Pi is **not** the LAN's gateway — it usually isn't; the router is — then
-it never sees a packet addressed to `8.8.8.8`.
-
-⚠ **The universal advice, an nftables/iptables `REDIRECT` of port 53 to Pi-hole,
-is a no-op on this topology.** The rule loads, the ruleset looks right, and it
-catches nothing. Enforcement lives at the router or nowhere.
-
-What this stack does instead is remove the *bootstrap*: 18 `server=/domain/`
-lines in `FTLCONF_misc_dnsmasq_lines` return NXDOMAIN for the major DoH/DoT
-rendezvous hostnames, plus an adlist for the long tail. A client that must
-resolve `dns.google` before it can speak DoH to it never gets an answer.
-
-That stops the **opportunistic** case — a browser or OS auto-upgrading itself.
-It does **not** stop a hardcoded resolver IP, and nothing on the Pi will.
-Trade-off: Chrome's "Secure DNS", iCloud Private Relay and NextDNS stop working
-for everyone. [docs/OPERATIONS.md](docs/OPERATIONS.md) §7.6 has the full
-reasoning and how to undo it.
-
+Read [docs/DECISIONS.md](docs/DECISIONS.md) before you build. It records the
+five expensive-to-reverse choices. Read [docs/OPERATIONS.md](docs/OPERATIONS.md)
+for all other operating detail.
 ---
 
 ## 8. Layout
@@ -687,13 +573,12 @@ $DATA_ROOT                      the USB disk
    └─ quarterly-update.log
 ```
 
-The compose project is named `pi-stack` and the deploy path is `/opt/pi-stack`.
-Both are cosmetic; changing them means updating the unit files `provision.sh`
-writes, so it is not a one-line rename.
+The Compose project is `pi-stack`. The deploy path is `/opt/pi-stack`. Keep
+both values. Changing either requires changes to unit files from `provision.sh`.
 
-**After each quarterly run the Pi's `docker-compose.yml` is authoritative** — the
-job rewrites digests and the `CADDY_VERSION` arg in place. Copy it back to your
-clone or the two drift.
+**After each quarterly run, the Pi `docker-compose.yml` is authoritative.** The
+job rewrites digests and `CADDY_VERSION` in place. Copy it to your clone to
+prevent drift.
 
 ---
 
@@ -701,5 +586,5 @@ clone or the two drift.
 
 MIT — see [LICENSE](LICENSE).
 
-No warranty. Read `Caddyfile` and `provision.sh` before running them on anything
-you care about.
+No warranty. Read `Caddyfile` and `provision.sh` before you run this stack on a
+host you care about.
