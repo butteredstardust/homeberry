@@ -56,7 +56,7 @@ have no UI. See [Security posture](#6-security-posture--read-this-before-you-dep
 | | [![MicroBin](https://img.shields.io/badge/MicroBin-6E4B9E?style=flat-square)](https://microbin.eu) | `danielszabo99/microbin` | `8083` | Paste text and small files between machines |
 | **Home** | [![Homebridge](https://img.shields.io/badge/Homebridge-491F59?style=flat-square&logo=homebridge&logoColor=white)](https://homebridge.io) | `homebridge/homebridge` | `8581` | HomeKit bridge. Host networking (mDNS) |
 | **Admin** | [![Pi-hole](https://img.shields.io/badge/Pi--hole-96060C?style=flat-square&logo=pihole&logoColor=white)](https://pi-hole.net) | `pihole/pihole` | `53`, `8080` | LAN DNS + ad blocking. Host networking (owns `:53`) |
-| | [Authelia](https://www.authelia.com/) | `authelia/authelia:4.39` | `8087` → `9091` | Forward-auth + mandatory TOTP for every admin vhost |
+| | [![Authelia](https://img.shields.io/badge/Authelia-056CFA?style=flat-square&logo=authelia&logoColor=white)](https://www.authelia.com/) | `authelia/authelia:4.39` | `8087` → `9091` | Forward-auth + mandatory TOTP for every admin vhost |
 | | [![Caddy](https://img.shields.io/badge/Caddy-1F88C0?style=flat-square&logo=caddy&logoColor=white)](https://caddyserver.com) | **built here** (`caddy/`) | `80`, `443` | Wildcard TLS for every UI in this table |
 | | [![Arcane](https://img.shields.io/badge/Arcane-0F766E?style=flat-square)](https://github.com/getarcaneapp/arcane) | `ghcr.io/getarcaneapp/manager` | `3552` | Docker web UI. **Root-equivalent** — treat as such |
 | | [![starbase-80](https://img.shields.io/badge/starbase--80-5B6478?style=flat-square)](https://github.com/notclickable-jordan/starbase-80) | `jordanroher/starbase-80` | `8084` | Dashboard linking to everything above |
