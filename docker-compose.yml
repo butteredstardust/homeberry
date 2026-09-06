@@ -158,7 +158,29 @@ services:
       # Cost, accepted: Chrome's "Secure DNS" toggle, iCloud Private Relay and
       # NextDNS stop working, for everyone. To undo, delete this one key and
       # `docker compose up -d pihole`.
-      FTLCONF_misc_dnsmasq_lines: "server=/dns.google/;server=/cloudflare-dns.com/;server=/one.one.one.one/;server=/dns.quad9.net/;server=/dns9.quad9.net/;server=/dns10.quad9.net/;server=/dns11.quad9.net/;server=/nextdns.io/;server=/doh.opendns.com/;server=/doh.familyshield.opendns.com/;server=/dns.adguard.com/;server=/dns.adguard-dns.com/;server=/doh.cleanbrowsing.org/;server=/dns.controld.com/;server=/mask.icloud.com/;server=/mask-h2.icloud.com/;server=/mask-api.icloud.com/;server=/resolver.arpa/"
+      #
+      # `dnssec-limits` raises ONE of dnsmasq's four DNSSEC resource caps. The
+      # fields are, in order: signature-validation failures per RRset (default
+      # 20), crypto operations per query (200), sub-queries to fetch DS and
+      # DNSKEY RRsets per query (40), NSEC3 iterations (150). A field of 0 keeps
+      # that default, so only the third value changes here.
+      #
+      # WHY: exceeding any limit makes dnsmasq treat the domain as BOGUS and
+      # answer SERVFAIL, logged as `DNSMASQ_WARN — limit exceeded: per-query
+      # subqueries` plus `validation of <name> failed: resource limit exceeded`.
+      # A long CNAME chain across several UNSIGNED zones is what costs the
+      # sub-queries: each zone cut needs a DS lookup and an NSEC/NSEC3 proof
+      # that no DS exists. Twitch's image CDN is one such chain —
+      # static-cdn.jtvnw.net to jtvnw.twitchcdn.net to
+      # h2-img.twitch.map.fastly.net, with jtvnw.net, twitchcdn.net and
+      # fastly.net all unsigned under a signed `net`. Short CDN TTLs re-validate
+      # the chain constantly, so the failure is intermittent, not permanent.
+      #
+      # This raises the bar for the denial of service the limit exists to stop;
+      # it does not remove it. Do NOT "fix" this class of warning by disabling
+      # dnssec-check-unsigned instead — that stops proving unsigned delegations
+      # at all, which is what lets an attacker strip signatures.
+      FTLCONF_misc_dnsmasq_lines: "server=/dns.google/;server=/cloudflare-dns.com/;server=/one.one.one.one/;server=/dns.quad9.net/;server=/dns9.quad9.net/;server=/dns10.quad9.net/;server=/dns11.quad9.net/;server=/nextdns.io/;server=/doh.opendns.com/;server=/doh.familyshield.opendns.com/;server=/dns.adguard.com/;server=/dns.adguard-dns.com/;server=/doh.cleanbrowsing.org/;server=/dns.controld.com/;server=/mask.icloud.com/;server=/mask-h2.icloud.com/;server=/mask-api.icloud.com/;server=/resolver.arpa/;dnssec-limits=0,0,100,0"
     volumes:
       - ./appdata/pihole/etc:/etc/pihole
     cap_add:

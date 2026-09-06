@@ -246,6 +246,66 @@ and NextDNS do not work for house users. To undo this, remove the
 `FTLCONF_misc_dnsmasq_lines` key. Run `docker compose up -d pihole`. Disable
 adlist 22. Run `pihole -g`.
 
+### DNSSEC resource limits
+
+`FTLCONF_misc_dnsmasq_lines` also carries `dnssec-limits=0,0,100,0`. This is
+unrelated to the bypass block above. It only shares the key.
+
+**The symptom it fixes** is a pair of `DNSMASQ_WARN` entries on the Pi-hole
+diagnosis page:
+
+```
+limit exceeded: per-query subqueries
+validation of <name> failed: resource limit exceeded.
+```
+
+dnsmasq treats any domain that trips a DNSSEC limit as **BOGUS**. It answers
+**SERVFAIL**. The name stops resolving while the condition holds.
+
+The four fields are, in order: signature-validation failures per RRset
+(default 20), crypto operations per query (200), sub-queries to fetch DS and
+DNSKEY RRsets per query (40), NSEC3 iterations (150). **A field of 0 keeps that
+default.** Only the third value is raised here, from 40 to 100.
+
+**A long CNAME chain across UNSIGNED zones is what consumes sub-queries.** A
+long chain alone does not. Every zone cut needs a DS lookup and an NSEC or
+NSEC3 proof that no DS exists. Twitch's image CDN is one such chain:
+
+| Name | Zone signed? |
+|---|---|
+| `static-cdn.jtvnw.net` → CNAME | `jtvnw.net` unsigned |
+| `jtvnw.twitchcdn.net` → CNAME | `twitchcdn.net` unsigned |
+| `h2-img.twitch.map.fastly.net` → A | `fastly.net` unsigned |
+| the `net` zone above all three | **signed** |
+
+The CDN A records carry a 14-second TTL. The chain is revalidated almost
+continuously. The failure therefore appears intermittently, not permanently.
+
+Confirm the signing status of any future offender before you raise a limit
+again. An unsigned parent under a signed grandparent is the shape to look for:
+
+```bash
+for z in example.net example.com; do
+  printf '%-24s DS:%s\n' "$z" "$(sudo docker exec pihole dig +short @1.1.1.1 "$z" DS | head -1)"
+done
+```
+
+**This raises the bar for the denial of service the limit exists to stop. It
+does not remove it.** Do not disable `dnssec-check-unsigned` instead. That is
+the cheap-looking alternative. It stops proving unsigned delegations at all,
+and that proof is what stops an attacker stripping signatures from a signed
+zone. After any change here, verify that a broken signature is still rejected:
+
+```bash
+sudo docker exec pihole dig @127.0.0.1 sigfail.verteiltesysteme.net A | grep 'status:'
+# SERVFAIL = validation works. NOERROR = DNSSEC does not validate.
+sudo docker exec pihole dig +dnssec @127.0.0.1 cloudflare.com A | grep 'flags:'
+# the `ad` flag must be present
+```
+
+A changed `FTLCONF_*` value needs `docker compose up -d pihole`. A container
+restart does not apply it.
+
 **To detect an actual bypass** (not implemented), compare the LAN neighbour
 table (`ip neigh show dev eth0`) with Pi-hole client history. A LAN device with
 zero DNS queries in N hours bypasses DNS or is a dumb device. This is the only
