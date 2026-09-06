@@ -131,6 +131,23 @@ sudo docker compose exec authelia authelia config validate
   # 302 to the portal = correct. 401 = the header strategies are back.
   ```
 
+- **`server.buffers.read` is raised to 16 KiB. The 4 KiB default breaks Pi-hole's Queries page.** Caddy keeps the original query string on the authz subrequest. Authelia therefore reads the whole upstream request line. Pi-hole's Queries page is a server-side DataTables grid. It sends about 3 KiB of `columns[n][...]` parameters per draw. Add the Host, Cookie, User-Agent and `X-Forwarded-*` headers and the request passes 4096 bytes. fasthttp then answers 431. The page reports "An unknown error occurred while loading the data". Neither Caddy nor Pi-hole logs this. Authelia does:
+
+  ```bash
+  sudo docker logs authelia | grep 'read buffer'
+  ```
+
+  The buffer is allocated per connection, not globally. 16 KiB costs a few hundred KiB against the 512 MiB limit. Confirm the limit from the Pi:
+
+  ```bash
+  V=$(head -c 8000 /dev/zero | tr '\0' a)
+  curl -s -o /dev/null -w '%{http_code}\n' -H "Cookie: x=$V" \
+    http://127.0.0.1:8087/api/authz/forward-auth
+  # 400 = headers were read. 431 = the buffer is back at its default.
+  ```
+
+  Any backend whose XHR carries a long query string hits this behind forward-auth.
+
 - No nftables change is required. `:8087` binds only to loopback. Authelia uses a bridge. Caddy reaches it on the Compose network.
 - Do not add the portal as a dashboard tile. It is a login and enrolment workflow. Protected links reach it automatically.
 

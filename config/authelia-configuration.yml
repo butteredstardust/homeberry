@@ -4,6 +4,24 @@
 
 server:
   address: 'tcp://0.0.0.0:9091/'
+  # ⚠ THE 4 KiB DEFAULT IS TOO SMALL FOR forward_auth. Caddy keeps the original
+  # query string on the authz subrequest, so Authelia reads the WHOLE upstream
+  # request line, not just `/api/authz/forward-auth`. Pi-hole's Queries page is
+  # a server-side DataTables grid and sends ~3 KiB of `columns[n][...]`
+  # parameters per draw. Add Host, Cookie, User-Agent and the X-Forwarded-*
+  # headers and the request passes 4096 bytes. fasthttp then answers 431 and
+  # the page reports "An unknown error occurred while loading the data".
+  # Found 2026-09-06 on pihole.DOMAIN/admin/queries.
+  #
+  # Diagnose the same shape again with:
+  #   docker logs authelia | grep 'read buffer'
+  # It names the limit and prints the truncated request.
+  #
+  # 16 KiB is per connection, not global, so the cost is bounded by concurrent
+  # admin sessions — a few hundred KiB against this container's 512 MiB limit.
+  buffers:
+    read: 16384
+    write: 16384
   endpoints:
     authz:
       forward-auth:
