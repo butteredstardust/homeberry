@@ -759,7 +759,9 @@ services:
       - ./appdata/diun:/data
     environment:
       <<: *env
-      DOCKER_HOST: tcp://socket-proxy-ro:2375
+      # Diun's Docker provider does not read the generic DOCKER_HOST variable;
+      # its endpoint must be configured through the provider-specific option.
+      DIUN_PROVIDERS_DOCKER_ENDPOINT: tcp://socket-proxy-ro:2375
       # 06:00 daily. Deliberately not more often: tags here move weekly at most,
       # and every check is a registry round-trip per image.
       DIUN_WATCH_SCHEDULE: "0 6 * * *"

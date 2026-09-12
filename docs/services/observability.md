@@ -37,6 +37,8 @@ Diun checks whether a newer image is published. **It writes a log line. It does 
 
 The schedule is `0 6 * * *` (daily, 06:00). `DIUN_WATCH_FIRSTCHECKNOTIF: "false"` suppresses twelve first-start "new image found" lines. Those lines record a baseline. They do not report updates.
 
+The proxy endpoint must be set with `DIUN_PROVIDERS_DOCKER_ENDPOINT=tcp://socket-proxy-ro:2375`. Diun does not use the generic `DOCKER_HOST` variable for this provider. With only that variable, it falls back to `/var/run/docker.sock`, logs `Cannot create Docker client`, and can still misleadingly finish with `failed=0` after analyzing zero images.
+
 **Diun watches digest pins correctly.** Every `docker-compose.yml` image is `tag@sha256:…`. Diun follows the tag. It reports when the tag digest changes. Verified at first run: 11 images analyzed, all resolved.
 
 ⚠ **Exclude Caddy with `labels: diun.enable: "false"`.** `pi-stack/caddy` is built locally and has no registry. Diun resolves it to `docker.io/pi-stack/caddy`. It then fails with *"requested access to the resource is denied"*. This daily failure makes Diun output unreliable. `CADDY_VERSION` in the build args tracks the upstream version. `quarterly-update.sh` updates it. Confirmed after the fix: `failed=0`, `unchanged=11`.
@@ -96,8 +98,9 @@ for s in logs metrics; do
     "https://$s.${CADDY_DOMAIN}/"
 done
 
-# Diun must report failed=0 — a nonzero count means an image it cannot resolve
-sudo docker logs diun 2>&1 | grep "Jobs completed" | tail -1
+# Diun must discover images, report failed=0, and have no provider error.
+sudo docker logs --since 10m diun 2>&1 | grep -E \
+  "Found [1-9][0-9]* image|Cannot create Docker client|Jobs completed" | tail -3
 
 # Beszel agent must be active, see both disks, and must NOT be listening
 systemctl status beszel-agent
