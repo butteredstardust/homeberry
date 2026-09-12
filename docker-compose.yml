@@ -36,7 +36,7 @@ services:
   # channel quarterly-update.sh follows.
   authelia:
     <<: *common
-    image: authelia/authelia:4.39@sha256:68277b28658a69bb3f512c2c23c41c7df7d9311d0e506e64e26c96dcd75d0539
+    image: authelia/authelia:4.39@sha256:16b804fbf6704b456ffb6e474c8e9d2406f9544ca0fecfeca7b4dcbed647deb4
     container_name: authelia
     # The image's entrypoint supports PUID/PGID, but an explicit Docker user is
     # the enforceable boundary. appdata/authelia is created 1000:1000 by the
@@ -198,7 +198,7 @@ services:
   # really a direct-play server.
   plex:
     <<: *common
-    image: lscr.io/linuxserver/plex:latest@sha256:f6c58cb2f5e41cd1397bf2ed4e61ef63bd86e0736841b3ef426fabfe04606293
+    image: lscr.io/linuxserver/plex:latest@sha256:1f6f97d76e7bdb013789e94c838f2d9133b01ee4b2d4194148e492c4e4f12d90
     container_name: plex
     network_mode: host
     environment:
@@ -235,7 +235,7 @@ services:
   # 9091, 3552, 8082, 8083, 8085, 8086, 80 and 443. None of those, ever.
   transmission:
     <<: *common
-    image: lscr.io/linuxserver/transmission:latest@sha256:7356451f32395838628b241f33bcd7130df9302777fc23f80cbc7ca8b4997c02
+    image: lscr.io/linuxserver/transmission:latest@sha256:fc3b07f2f571c0392edd4dd386067138a0fe157d2158a976769409a292e43936
     container_name: transmission
     ports:
       - "${BIND_ADDR:-127.0.0.1}:9091:9091"   # web UI
@@ -282,7 +282,7 @@ services:
   # appdata/filebrowser/config.yaml.
   filebrowser:
     <<: *common
-    image: gtstef/filebrowser:stable@sha256:e2ac55ccbe53d63b3f1d7d5ea5b82edf589b005a4b747b59912f97c6ba4f969e
+    image: gtstef/filebrowser:stable@sha256:7c5d7ac8ffda31294d278063cf9d2e04303b39e6dce1f4c691342240ca7703b8
     container_name: filebrowser
     ports:
       - "${BIND_ADDR:-127.0.0.1}:8082:80"
@@ -476,7 +476,7 @@ services:
 
   arcane:
     <<: *common
-    image: ghcr.io/getarcaneapp/manager:latest@sha256:2425b5a3780c32b743d6229c5dd4ec245e9fe42f897e0d0c3f6276eed3873a5d
+    image: ghcr.io/getarcaneapp/manager:latest@sha256:a7005e4be1740ae7f3c0aa694ef825552271cb320b3906a98a5e8a642faa163a
     container_name: arcane
     ports:
       - "${BIND_ADDR:-127.0.0.1}:3552:3552"
@@ -531,7 +531,7 @@ services:
     # so pin by digest. The image ships only homebridge-config-ui-x — Homebridge
     # itself lives in the /homebridge volume, so the restored package.json
     # governs its version. Upgrade via the UI, deliberately.
-    image: homebridge/homebridge:latest@sha256:e424c8007c522b978d55ed5cf07de99c635e4f72a1dfd893b587dccf76779cb2
+    image: homebridge/homebridge:latest@sha256:77c685a40911b3b95448f3550be0c8b94cd7b4e66daecc1cc39a8285be75b245
     container_name: homebridge
     network_mode: host
     environment:
@@ -630,7 +630,7 @@ services:
   # this box, including which ones exist and roughly what they are.
   starbase80:
     <<: *common
-    image: jordanroher/starbase-80:latest@sha256:6eb898bfa3ad2d38aca9e1e5597b3b1046112deb35c194887942a421fa822991
+    image: jordanroher/starbase-80:latest@sha256:249bcbb108afba0f597fa2d0c2a55325376f42c01b757e0fe26848222d4eb969
     container_name: starbase80
     ports:
       # Host 8084 -> container 4173: nginx inside listens on 4173, not 80, so
@@ -710,7 +710,7 @@ services:
   # too; the command is in .env.
   dozzle:
     <<: *common
-    image: amir20/dozzle:latest@sha256:068025ea622a1ce3e343a138dd9a962429b5187a133aca301bb4991fe7d2b708
+    image: amir20/dozzle:latest@sha256:8d88ee5cb7f7144bc5d42f11181e576a321d5d084101c0ae3db7227a8d84967e
     container_name: dozzle
     ports:
       # Break-glass route only, same as starbase80's 8084 — the normal way in is
@@ -792,7 +792,7 @@ services:
   # §7.8. The two are updated together by quarterly-update.sh.
   beszel:
     <<: *common
-    image: henrygd/beszel:0.18.8@sha256:4c51486968efa0b0a702c1b0967966a2e06fb250b7418f3072d2488faea27c51
+    image: henrygd/beszel:0.19.0@sha256:fefb27166f5e1611ebf67f8697ea928a23f44efdb00af922e2ac3b5faa2efd5c
     container_name: beszel
     ports:
       - "${BIND_ADDR:-127.0.0.1}:8086:8090"   # break-glass; normal route is metrics.<domain>
