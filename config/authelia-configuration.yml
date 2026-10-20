@@ -92,6 +92,7 @@ access_control:
     - domain:
         - 'pihole.{{ env "CADDY_DOMAIN" }}'
         - 'files.{{ env "CADDY_DOMAIN" }}'
+        - 'drops.{{ env "CADDY_DOMAIN" }}'
         - 'torrents.{{ env "CADDY_DOMAIN" }}'
         - 'docker.{{ env "CADDY_DOMAIN" }}'
         - 'homebridge.{{ env "CADDY_DOMAIN" }}'

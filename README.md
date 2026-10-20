@@ -43,15 +43,16 @@ the stack starts.
 
 ## 1. What you get
 
-The stack has thirteen services and native Samba. The dashboard uses these
-groups. Fifteen containers run in total. Two `docker-socket-proxy` containers
+The stack has fourteen services and native Samba. The dashboard uses these
+groups. Sixteen containers run in total. Two `docker-socket-proxy` containers
 have no UI. See [Security posture](#6-security-posture--read-this-before-you-deploy).
 
 | | Service | Image | Port | Purpose |
 |---|---|---|---|---|
 | **Media** | [![Plex](https://img.shields.io/badge/Plex-E5A00D?style=flat-square&logo=plex&logoColor=white)](https://www.plex.tv) | `lscr.io/linuxserver/plex` | `32400` | Films, TV, music. Host networking. Deliberately **not** proxied |
 | | [![Transmission](https://img.shields.io/badge/Transmission-D70008?style=flat-square&logo=transmission&logoColor=white)](https://transmissionbt.com) | `lscr.io/linuxserver/transmission` | `9091` | Torrents |
-| **Files** | [![FileBrowser](https://img.shields.io/badge/FileBrowser-455A64?style=flat-square&logo=files&logoColor=white)](https://github.com/gtsteffaniak/filebrowser) | `gtstef/filebrowser:stable` | `8082` | Web file manager for the data drive |
+| | [Twitch Drops Miner](https://github.com/rangermix/TwitchDropsMiner) | `rangermix/twitch-drops-miner` | `8088` → `8080` | Track and claim timed Twitch drops |
+| **Files** | [![FileBrowser](https://img.shields.io/badge/FileBrowser-455A64?style=flat-square&logo=files&logoColor=white)](https://github.com/gtsteffaniak/filebrowser) | `gtstef/filebrowser:1-stable` | `8082` | Web file manager for the data drive |
 | | [![Samba](https://img.shields.io/badge/Samba-4E5A65?style=flat-square&logo=server&logoColor=white)](https://www.samba.org) | native, not a container | `139`, `445` | SMB share of the data drive |
 | | [![MicroBin](https://img.shields.io/badge/MicroBin-6E4B9E?style=flat-square&logo=paste&logoColor=white)](https://microbin.eu) | `danielszabo99/microbin` | `8083` | Paste text and small files between machines |
 | **Home** | [![Homebridge](https://img.shields.io/badge/Homebridge-491F59?style=flat-square&logo=homebridge&logoColor=white)](https://homebridge.io) | `homebridge/homebridge` | `8581` | HomeKit bridge. Host networking (mDNS) |
@@ -94,7 +95,7 @@ flowchart LR
         CAD["Caddy :443<br/>one wildcard cert"]
         ADM{"(adminonly)<br/>remote_ip in<br/>ADMIN_SOURCES?"}
         APPS["Household UIs<br/>dashboard, paste"]
-        ADMIN["Admin UIs<br/>Pi-hole, files, torrents,<br/>Arcane, Homebridge, logs, metrics"]
+        ADMIN["Admin UIs<br/>Pi-hole, files, torrents, drops,<br/>Arcane, Homebridge, logs, metrics"]
         PLEX["Plex :32400<br/>deliberately unproxied"]
         SMB["Samba :445"]
     end
@@ -385,7 +386,7 @@ The workstation **pulls** backups. The Pi stores no workstation credentials.
 ```bash
 cd /opt/pi-stack
 
-# 1. every Compose container up and healthy (15 of them)
+# 1. every Compose container up and healthy (16 of them)
 docker compose ps
 
 # Native Beszel collector (SMART history + host/container metrics)
@@ -434,7 +435,7 @@ ls -lh "$DATA_ROOT"/backup/appdata/
 
 Before login, `auth.` and `home.` return 200. `paste.` keeps its own 401.
 Every admin name redirects to `auth.`. After TOTP enrolment and login, the
-seven admin names reach their service login. Keep those logins as defence in
+eight admin names reach their service login. Keep those logins as defence in
 depth.
 
 ---
@@ -469,7 +470,7 @@ access only. These choices are wrong for another threat model:
   | | Enforced by | Covers |
   |---|---|---|
   | Layer 4 | `config/nftables.conf` `$admin_sources` | `22` SSH, `8080` Pi-hole, `8581` Homebridge |
-  | Layer 7 | `Caddyfile` `(adminonly)` | `pihole` `files` `torrents` `docker` `homebridge` `logs` `metrics` vhosts |
+  | Layer 7 | `Caddyfile` `(adminonly)` | `pihole` `files` `torrents` `drops` `docker` `homebridge` `logs` `metrics` vhosts |
 
   Caddy performs the second tier. Every vhost arrives on `:443` and layer 4
   cannot distinguish them. The tailnet is always admin. nftables admits
@@ -487,6 +488,9 @@ access only. These choices are wrong for another threat model:
   allowlist runs first. Each backend keeps its own login. If Authelia fails,
   these names fail closed with 502. Use SSH and loopback ports for break-glass
   access. The portal uses `8087`.
+- **Twitch Drops Miner stores Twitch session credentials.** Its dashboard is
+  protected by both `(adminonly)` and Authelia. The `8088` fallback is bound to
+  loopback and is intended only for an SSH tunnel.
 - **Filebrowser exposes the complete drive at `/srv`, including backups.** Any
   logged-in user can remove them. Use FileBrowser Quantum multi-source config
   to limit access.
@@ -560,6 +564,7 @@ for all other operating detail.
    ├─ authelia/                 users DB, SQLite TOTP state, notifications
    ├─ plex/                     library DB, watch state, metadata
    ├─ transmission/             settings.json, resume data
+   ├─ twitch-drops-miner/       session data + logs
    ├─ filebrowser/              config.yaml + database.db
    ├─ arcane/                   arcane.db = users + settings
    ├─ caddy/                    certificates + ACME account key

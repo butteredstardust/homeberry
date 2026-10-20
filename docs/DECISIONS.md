@@ -31,6 +31,7 @@ A trusted certificate encrypts a connection. It provides **no access control**. 
 | `8082` Filebrowser | whole drive at `/srv`, **including the backups** |
 | `9091` Transmission | RPC whitelist is disabled; a shared password is all that stands there |
 | `8083` MicroBin | `/raw/<id>` returns full content with **no credentials** — upstream behaviour, not configurable |
+| `8088` Twitch Drops Miner | dashboard and persistent state contain Twitch session credentials |
 | `8085` Dozzle | container logs contain environment dumps and tokens in stack traces — a session here is **equivalent to reading `.env`** |
 | `8086` Beszel | **the first visitor becomes the owner** until an admin account exists, and it inventories the whole host |
 | `80` `443` Caddy | the front door to all of the above |

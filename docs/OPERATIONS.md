@@ -39,6 +39,7 @@ Services use the `pi` username and a password from `.env`. Two table entries are
 | Pi-hole | `pihole.` → `/admin` | `:8080/admin` | **none — v6 has no username field** | `.env` → `PIHOLE_PASSWORD` |
 | Plex | **not proxied, on purpose** | `:32400/web` | plex.tv account | not on this box |
 | Transmission | `torrents.` | `:9091` | `pi` | `.env` → `TRANSMISSION_PASSWORD` |
+| Twitch Drops Miner | `drops.` | `:8088` → container `:8080` | Twitch session | stored under `appdata/twitch-drops-miner/data/` |
 | Homebridge | `homebridge.` | `:8581` | `pi` | PBKDF2 in `appdata/homebridge/auth.json`, **not** in `.env` |
 | Filebrowser | `files.` | `:8082` | `pi` | `.env` → `FILEBROWSER_PASSWORD` |
 | Arcane | `docker.` | `:3552` | `arcane` | **exception** — 12+ chars, mixed case, digit and symbol, or Arcane refuses it · `.env` → `ARCANE_PASSWORD` |
@@ -332,7 +333,8 @@ Nothing is lost. `:8080` (Pi-hole) and `:8581` (Homebridge) answer directly on `
 ```bash
 ssh -N -L 8084:127.0.0.1:8084 -L 8082:127.0.0.1:8082 -L 8083:127.0.0.1:8083 \
        -L 9091:127.0.0.1:9091 -L 3552:127.0.0.1:3552 -L 8085:127.0.0.1:8085 \
-       -L 8086:127.0.0.1:8086 -L 8087:127.0.0.1:8087 pi@<LAN_IP>
+       -L 8086:127.0.0.1:8086 -L 8087:127.0.0.1:8087 -L 8088:127.0.0.1:8088 \
+       pi@<LAN_IP>
 ```
 
 `http://<LAN_IP>/` still reaches the dashboard. Caddy serves that HTTP site block without a certificate. Diagnose with [HTTPS](services/https.md).
@@ -513,7 +515,12 @@ sudo bash provision.sh firewall
 
 Caddy reaches host-networked Pi-hole and Homebridge through `caddy_host`. `.env` provides `CADDY_HOST_SUBNET`, `CADDY_HOST_GATEWAY`, and `CADDY_HOST_IP`. Compose and nftables use these values. `provision.sh stack` checks the values. It rejects overlap with a Docker network. It refuses a different address in `/etc/nftables.conf`. Only the Caddy IP reaches `8080` and `8581` before Tier 2. Do not broaden this to a subnet. Other containers could bypass the workstation-only rule.
 
-**Tier 2 ends at layer 4.** The firewall cannot distinguish web names behind Caddy on `:443`. The `Caddyfile` `(adminonly)` snippet applies the per-vhost rule. It covers `pihole` `files` `torrents` `docker` `homebridge` `logs` and `metrics`. It uses the same `ADMIN_SOURCES` value. Caddy substitutes this value during parsing. Restart Caddy after a change.
+**Tier 2 ends at layer 4.** The firewall cannot distinguish web names behind Caddy on `:443`. The `Caddyfile` `(adminonly)` snippet applies the per-vhost rule. It covers `pihole` `files` `torrents` `drops` `docker` `homebridge` `logs` and `metrics`. It uses the same `ADMIN_SOURCES` value. Caddy substitutes this value during parsing. Restart Caddy after a change.
+
+The matcher also permanently admits `CADDY_HOST_GATEWAY/32`. This is the Pi's
+side of the dedicated `caddy_host` bridge and lets the unattended quarterly
+update exercise a protected route end to end. It is a host-only health-check
+path, not a broader LAN exception. Do not replace the `/32` with the subnet.
 
 ```bash
 docker compose up -d --force-recreate caddy
@@ -582,7 +589,7 @@ Per-service runbook notes live in [`services/`](services/):
 
 | Document | Covers |
 | --- | --- |
-| [Applications](services/apps.md) | Filebrowser, MicroBin, Dashboard (starbase-80), Arcane |
+| [Applications](services/apps.md) | Filebrowser, MicroBin, Twitch Drops Miner, Dashboard (starbase-80), Arcane |
 | [HTTPS](services/https.md) | Caddy, Let's Encrypt, DuckDNS |
 | [Network](services/network.md) | Pi-hole blocklists and the encrypted-DNS bypass, Tailscale |
 | [Observability](services/observability.md) | Dozzle, Diun, Beszel |
@@ -604,7 +611,7 @@ The quarterly job restores the prior state after a failed health check:
 2. simulate `full-upgrade`; if it wants to **remove** anything, skip it, fall back
    to `--with-new-pkgs upgrade`, leave removals for a human
 3. re-pin each image to the current digest **of its own channel tag** — these are
-   not all `latest` (Filebrowser tracks `stable`); resolve the newest Caddy 2.x
+   not all `latest` (Filebrowser tracks `1-stable`); resolve the newest Caddy 2.x
    and rewrite the build arg; keep the old file as `.docker-compose.prev.yml`
 4. health-check every service for up to 5 min, including an end-to-end TLS check
    through Caddy

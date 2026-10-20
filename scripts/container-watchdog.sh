@@ -45,7 +45,7 @@ mapfile -t CONTAINERS < <(
 if (( ${#CONTAINERS[@]} == 0 )); then
   echo "WARNING: could not read services from docker-compose.yml — using fallback list" >&2
   CONTAINERS=(
-    pihole plex transmission homebridge filebrowser arcane
+    pihole plex transmission homebridge filebrowser twitch-drops-miner arcane
     caddy dozzle diun beszel microbin starbase80
   )
 fi

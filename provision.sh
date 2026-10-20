@@ -753,6 +753,8 @@ PY
   fi
 
   mkdir -p "$STACK"/appdata/{pihole/etc,plex,transmission,homebridge,filebrowser,arcane,microbin}
+  install -d -o 1000 -g 1000 -m 0700 \
+    "$STACK"/appdata/twitch-drops-miner/{data,logs}
   mkdir -p "$STACK"/appdata/starbase80/icons
   mkdir -p "$STACK"/appdata/caddy/{data,config}
   mkdir -p "$STACK"/appdata/dozzle
@@ -804,10 +806,10 @@ PY
 
   # starbase80's service icons are deliberately LOCAL rather than CDN-fetched, so
   # the dashboard renders with no internet and makes no outbound requests per load.
-  # Twelve files, ~370 KB, which also lands in the nightly appdata backup.
+  # Thirteen files, ~400 KB, which also lands in the nightly appdata backup.
   # Missing icons are not fatal — you get a broken image, not a broken page —
   # so a download failure only warns.
-  for _icon in pi-hole plex transmission filebrowser homebridge microbin arcane samba-server authelia beszel dozzle tailscale; do
+  for _icon in pi-hole plex transmission twitch filebrowser homebridge microbin arcane samba-server authelia beszel dozzle tailscale; do
     _dest="$STACK/appdata/starbase80/icons/${_icon}.png"
     [[ -s "$_dest" ]] && continue
     curl -sfL -m 20 -o "$_dest" \
@@ -1644,7 +1646,7 @@ cat <<EOF
 
     :8084 dashboard  :9091 transmission  :8082 files
     :3552 arcane     :8083 paste         :8085 logs   :8086 metrics
-    :8087 authelia
+    :8087 authelia   :8088 drops
 
   These two are host-networked and DO answer on $LAN_IP directly, subject to
   the ADMIN_SOURCES firewall tier:

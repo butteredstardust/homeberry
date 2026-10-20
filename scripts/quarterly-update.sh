@@ -64,8 +64,12 @@ CHANNELS=(
   "plex|lscr.io/linuxserver/plex:latest"
   "transmission|lscr.io/linuxserver/transmission:latest"
   "homebridge|homebridge/homebridge:latest"
-  "filebrowser|gtstef/filebrowser:stable"
+  # Filebrowser's unqualified `stable` moved from v1 to v2 in October 2026.
+  # v2 removes/renames configuration fields used by this stack, so stay on the
+  # maintained v1 patch channel until its schema migration is planned.
+  "filebrowser|gtstef/filebrowser:1-stable"
   "microbin|danielszabo99/microbin:latest"
+  "twitch-drops-miner|rangermix/twitch-drops-miner:latest"
   "arcane|ghcr.io/getarcaneapp/manager:latest"
   "starbase80|jordanroher/starbase-80:latest"
   "dozzle|amir20/dozzle:latest"
@@ -118,6 +122,7 @@ health_ok() {
     # user can log in and enrol TOTP. 200 is therefore the healthy unauthenticated
     # response; :8087 is the host break-glass port, not container :9091.
     curl -s -o /dev/null -m 10 -w '%{http_code}' http://127.0.0.1:8087/ | grep -q '^200$' || ok=0
+    curl -sf -o /dev/null -m 10 http://127.0.0.1:8088/healthz                           || ok=0
     # The authz endpoint redirects a valid unauthenticated request to the
     # configured portal. Observed with v4.39.20: 302 (a request for an unknown
     # domain is 400, so include the real forwarded host in this probe).
@@ -140,6 +145,14 @@ health_ok() {
     curl -sf -o /dev/null -m 15 \
          --resolve "home.${CADDY_DOMAIN}:443:127.0.0.1" \
          "https://home.${CADDY_DOMAIN}/"                                                 || ok=0
+    # The protected drops route should reach Authelia and redirect an
+    # unauthenticated request. Its backend is checked separately on :8088.
+    # Caddy's admin tier permanently admits only the dedicated host-side bridge
+    # address in addition to ADMIN_SOURCES, so this remains valid when the LAN
+    # allowlist is narrowed to specific workstations.
+    curl -s -o /dev/null -m 15 -w '%{http_code}' \
+         --resolve "drops.${CADDY_DOMAIN}:443:127.0.0.1" \
+         "https://drops.${CADDY_DOMAIN}/" | grep -q '^302$'                              || ok=0
     (( ok == 1 )) && return 0
     sleep 10
   done
@@ -213,9 +226,9 @@ cp -a "$BESZEL_AGENT_VERSION_FILE" "$BESZEL_AGENT_PREV_VERSION_FILE"
 
 CHANGED=0
 for entry in "${CHANNELS[@]}"; do
-  # Preserve each image's own channel tag. Filebrowser tracks `stable`, not
-  # `latest` — the tags are not synonyms for this publisher and `beta` is a
-  # different major version.
+  # Preserve each image's own channel tag. Filebrowser tracks `1-stable`, not
+  # `latest` or unqualified `stable`; the latter now follows a different major
+  # version with a database/configuration migration.
   svc="${entry%%|*}"; ref="${entry#*|}"; repo="${ref%:*}"; tag="${ref##*:}"
 
   docker pull -q "$ref" >/dev/null 2>&1 || { warn "  $svc: pull failed, keeping current pin"; continue; }

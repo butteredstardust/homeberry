@@ -50,6 +50,13 @@ docker exec caddy caddy reload --config /etc/caddy/Caddyfile
 
 **Known failure modes:**
 
+- **Keep `CADDY_HOST_GATEWAY/32` in the `(adminonly)` matcher.** The quarterly
+  updater originates its end-to-end protected-route probe on the Pi, so Caddy
+  sees the dedicated `caddy_host` bridge gateway rather than a workstation in
+  `ADMIN_SOURCES`. This permanent host-only exception permits unattended health
+  checks; it does not admit another LAN source. Compose passes the gateway value
+  to Caddy and `provision.sh stack` validates the dedicated bridge addresses.
+
 - **`lookup acme-v02.api.letsencrypt.org on 127.0.0.11:53: server misbehaving`**
   means Caddy has no resolver. Use `dns: [1.1.1.1, 9.9.9.9]` on the caddy
   service. ⚠ **Do not use `depends_on` as the fix.** Caddy proxies the Pi-hole

@@ -83,7 +83,7 @@ fi
 # DNS is never interrupted. SQLite files are copied below through SQLite's
 # online backup API, including Plex, so a failed stop cannot tear those files.
 cd "$STACK"
-PAUSED_SERVICES=(plex transmission homebridge filebrowser diun)
+PAUSED_SERVICES=(plex transmission homebridge filebrowser twitch-drops-miner diun)
 RUNNING_SERVICES=()
 for service in "${PAUSED_SERVICES[@]}"; do
   running="$(docker inspect -f '{{.State.Running}}' "$service" 2>/dev/null)" \

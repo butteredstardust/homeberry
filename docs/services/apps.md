@@ -4,14 +4,15 @@ Use this runbook for user-facing applications. See [OPERATIONS.md](../OPERATIONS
 
 ## Filebrowser
 
-FileBrowser Quantum runs from `gtstef/filebrowser:stable` (v1.5.3). It is a
-hard fork of `filebrowser/filebrowser:s6`. Its database, configuration format,
-and CLI differ. No v1 state is in use. `appdata/filebrowser.fb1-archived/` is
-removed.
+FileBrowser Quantum runs from the maintained v1 channel,
+`gtstef/filebrowser:1-stable`. It is a hard fork of
+`filebrowser/filebrowser:s6`. Its database, configuration format, and CLI
+differ from the original project. The unqualified `stable` tag now follows
+Quantum v2, whose database and configuration need a planned migration.
 
 | | |
 |---|---|
-| Image | `gtstef/filebrowser:stable` (v1.x). **Not `beta`** — that is v2.x, which moves bolt → SQLite and renames config keys |
+| Image | `gtstef/filebrowser:1-stable` (v1.x), digest-pinned. Do not change to unqualified `stable` without completing the v2 migration |
 | Config | `filebrowser-config.yaml` → `appdata/filebrowser/config.yaml`; read at every start |
 | Database | `appdata/filebrowser/database.db` — users, shares, UI-set settings |
 | Runs as | uid/gid 1000, natively — no PUID/PGID variant tag needed |
@@ -78,6 +79,31 @@ animal triplets. The listing page requires the password.
   days** (`MICROBIN_DEFAULT_EXPIRY`, `MICROBIN_GC_DAYS`). Set a longer expiry in
   the form when required.
 
+## Twitch Drops Miner
+
+Twitch Drops Miner keeps eligible streams active without downloading video or
+audio, then claims timed campaign rewards.
+
+| | |
+|---|---|
+| Image | `rangermix/twitch-drops-miner:latest`, digest-pinned to the v2.3.0 release image |
+| HTTPS | `https://drops.${CADDY_DOMAIN}` |
+| Break-glass | `127.0.0.1:8088` → container `:8080`; use an SSH tunnel |
+| State | `appdata/twitch-drops-miner/data/` |
+| Logs | `appdata/twitch-drops-miner/logs/` |
+| Runtime | 1 GB memory limit, 256 MB shared memory, init process, 30 s stop grace period |
+
+⚠ **The dashboard contains Twitch session credentials.** The HTTPS route is
+inside the Caddy `ADMIN_SOURCES` allowlist and Authelia two-factor boundary.
+Never expose port 8088; it is loopback-only for recovery. `PUBLIC_BASE_URL`
+must remain the exact `https://drops.${CADDY_DOMAIN}` origin so secure cookies,
+API writes, and Socket.IO use the public URL.
+
+The data and log mounts survive container recreation and are included in the
+normal appdata backups. The quarterly updater refreshes the image digest only
+after backup, then health-checks the loopback backend and the protected HTTPS
+route before accepting the update.
+
 ## Dashboard (starbase-80)
 
 The dashboard provides service links without requiring a remembered port.
@@ -87,7 +113,7 @@ The dashboard provides service links without requiring a remembered port.
 | Image | `jordanroher/starbase-80` v1.6.6, digest-pinned |
 | Port | **8084** on the host → 4173 in the container (nginx listens on 4173) |
 | Links | `appdata/starbase80/config.json`, mounted read-only — **rendered** by `provision.sh` from `config/starbase80-config.json.tmpl`; edit the template, not the output |
-| Icons | `appdata/starbase80/icons/`, 13 PNGs, ~380 KB, served locally — 12 service icons fetched once from the icon CDN, plus `homeberry.png`, the logo, copied from `assets/` on every provision run |
+| Icons | `appdata/starbase80/icons/`, 14 PNGs, served locally — 13 service icons fetched once from the icon CDN, plus `homeberry.png`, the logo, copied from `assets/` on every provision run |
 | Auth | **none** — it is a page of links; the firewall and "never forward" are the control |
 
 **Four names reach the dashboard:**

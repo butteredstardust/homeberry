@@ -60,7 +60,7 @@ client → ADMIN_SOURCES allowlist → Authelia password + TOTP → backend logi
 | State | `appdata/authelia/db.sqlite3` — SQLite, including TOTP enrolments |
 | Session | memory; a container restart requires a fresh login |
 | Notification | `appdata/authelia/notification.txt`; no SMTP or external DNS |
-| Policy | default `deny`; `auth.` / `home.` / `paste.` bypass; the seven admin names `two_factor` |
+| Policy | default `deny`; `auth.` / `home.` / `paste.` bypass; the eight admin names `two_factor` |
 
 **First TOTP enrolment requires a person:**
 
