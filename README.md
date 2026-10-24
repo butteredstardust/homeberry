@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](LICENSE)
 [![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi%204-A22846?style=for-the-badge&logo=raspberrypi&logoColor=white)](https://www.raspberrypi.com/products/raspberry-pi-4-model-b/)
 [![Debian](https://img.shields.io/badge/Raspberry%20Pi%20OS-arm64-A81D33?style=for-the-badge&logo=debian&logoColor=white)](https://www.raspberrypi.com/software/operating-systems/)
-[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-13%20services-2496ED?style=for-the-badge&logo=docker&logoColor=white)](docker-compose.yml)
+[![Docker Compose](https://img.shields.io/badge/Docker%20Compose-16%20containers-2496ED?style=for-the-badge&logo=docker&logoColor=white)](docker-compose.yml)
 [![Caddy](https://img.shields.io/badge/Caddy-DNS--01-1F88C0?style=for-the-badge&logo=caddy&logoColor=white)](https://caddyserver.com)
 [![Let's Encrypt](https://img.shields.io/badge/TLS-wildcard-003A70?style=for-the-badge&logo=letsencrypt&logoColor=white)](https://letsencrypt.org)
 [![Tailscale](https://img.shields.io/badge/Tailscale-optional-242424?style=for-the-badge&logo=tailscale&logoColor=white)](https://tailscale.com)
@@ -66,8 +66,8 @@ have no UI. See [Security posture](#6-security-posture--read-this-before-you-dep
 | | [![Diun](https://img.shields.io/badge/Diun-795548?style=flat-square&logo=bell&logoColor=white)](https://crazymax.dev/diun/) | `crazymax/diun` | — | Notifies when an image goes stale |
 
 **The Port column shows the container port. It does not show a LAN address.**
-Only `53`, `80`, `443`, `8080`, `8581`, `32400`, and Samba publish beyond
-`127.0.0.1` (`BIND_ADDR`). Use `https://<service>.<your-domain>` through Caddy.
+Only `53`, `80`, `443`, `8080`, `8581`, `32400`, Transmission's peer port
+`51413`, and Samba publish beyond `127.0.0.1` (`BIND_ADDR`). Use `https://<service>.<your-domain>` through Caddy.
 See [Security posture](#6-security-posture--read-this-before-you-deploy).
 
 `provision.sh` creates the nftables firewall and optional Tailscale subnet
@@ -94,6 +94,7 @@ flowchart LR
         TS["tailscaled<br/>subnet router"]
         CAD["Caddy :443<br/>one wildcard cert"]
         ADM{"(adminonly)<br/>remote_ip in<br/>ADMIN_SOURCES?"}
+        AUTH["Authelia<br/>forward-auth<br/>password + TOTP"]
         APPS["Household UIs<br/>dashboard, paste"]
         ADMIN["Admin UIs<br/>Pi-hole, files, torrents, drops,<br/>Arcane, Homebridge, logs, metrics"]
         PLEX["Plex :32400<br/>deliberately unproxied"]
@@ -115,7 +116,8 @@ flowchart LR
     NFT --> PLEX
     CAD --> APPS
     CAD --> ADM
-    ADM -->|"yes"| ADMIN
+    ADM -->|"yes"| AUTH
+    AUTH -->|"session valid"| ADMIN
     ADM -.->|"no - 403"| CLI
     CAD -->|"3 - writes TXT"| DUCK
     LE -.->|"reads it. No inbound needed"| DUCK
@@ -125,9 +127,46 @@ flowchart LR
     TS --> SMB
 ```
 
-Step 3 writes the DNS proof. CGNAT prevents Let's Encrypt from reaching port 80.
+An admin vhost passes two independent gates: the `(adminonly)` source-IP check,
+then Authelia. The household names `home.` and `paste.` skip both. Step 3 writes
+the DNS proof. CGNAT prevents Let's Encrypt from reaching port 80.
 DNS-01 proves control of the *name* without an inbound connection. See
 [docs/DECISIONS.md](docs/DECISIONS.md#https-works-because-of-dns-01-not-because-anything-is-exposed).
+
+### What happens on an admin request
+
+Every admin vhost in the `Caddyfile` uses the same `route`: `import adminonly`,
+then `import authelia`, then `reverse_proxy`. `files.` is the example here.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant C as Caddy
+    participant A as Authelia
+    participant S as FileBrowser
+
+    B->>C: GET https://files.YOUR_DOMAIN/
+    C->>C: (adminonly) is remote_ip in ADMIN_SOURCES,<br/>the caddy_host gateway, or 100.64.0.0/10?
+    alt not an admin source
+        C-->>B: 403 restricted to admin sources
+    else admin source
+        C->>A: forward_auth /api/authz/forward-auth
+        alt no valid session
+            A-->>C: redirect to auth.YOUR_DOMAIN
+            C-->>B: 302
+            B->>A: password + TOTP, via Caddy on auth.YOUR_DOMAIN
+            A-->>B: session cookie, redirect back
+        else session valid
+            A-->>C: 200 + Remote-User, Remote-Groups
+            C->>S: reverse_proxy filebrowser:80
+            S-->>B: FileBrowser's own login
+        end
+    end
+```
+
+If Authelia is down, `forward_auth` cannot get an answer and the admin names
+fail closed with `502`. The backend's own login stays as defence in depth.
 
 ### Where state lives, and how it survives
 
@@ -211,6 +250,10 @@ cp .env.example .env && chmod 600 .env
 | `LOCAL_DNS_NAME` | `home.internal` | Short local A record served by Pi-hole |
 | `PIHOLE_EXTRA_HOSTS` | *blank* | Semicolon-separated A/PTR records for DHCP-reserved devices; keep the real inventory only in `.env` |
 | `CADDY_HOST_SUBNET`, `CADDY_HOST_GATEWAY`, `CADDY_HOST_IP` | `172.22.0.0/29`, `.1`, `.2` | Dedicated Caddy-to-host path; `provision.sh stack` validates the set and rejects Docker-network overlap |
+| `DASHBOARD_TITLE` | `homeberry` | Heading on the starbase-80 dashboard. Separate from `LOCAL_HOSTNAME`, which renames the machine |
+| `ADMIN_SOURCES` | all RFC1918 | Who may reach SSH and the admin vhosts. Narrow it — see [Security posture](#6-security-posture--read-this-before-you-deploy) and the deadman-switch note in `.env.example` first |
+| `BIND_ADDR` | `127.0.0.1` | Bind address for every admin UI's fallback port. Leave it; `0.0.0.0` bypasses Caddy |
+| `SOCKET_PROXY_POST` | `1` | `0` makes Arcane read-only through its socket proxy |
 | `TZ` | `Etc/UTC` | From `timedatectl list-timezones` |
 | `DATA_DEV` | `/dev/sda1` | ⚠ **Verify with `lsblk`.** Used to derive `DATA_DRIVE_UUID` and to build `/etc/fstab` |
 | `DATA_DRIVE_UUID` | *blank* | Leave blank — `provision.sh` detects it, asks you to confirm, and writes it back |
@@ -310,6 +353,18 @@ that apply only after boot. Each setting affects containers created before boot:
   membership. Its first un-sudoed `docker compose` fails on the socket.
 
 There is no `all` stage. It would create a stack without memory limits.
+
+```mermaid
+flowchart TD
+    FLASH["Flash Pi OS Lite 64-bit<br/>DHCP reservation on the router"] --> ENV["rsync repo to /opt/pi-stack<br/>fill in .env"]
+    ENV --> S1["provision.sh host<br/>base, drive, perms, docker, native,<br/>firewall, tailscale, samba, dns"]
+    S1 --> RB["sudo reboot<br/>memory cgroup, AppArmor,<br/>docker group membership"]
+    RB --> S2["provision.sh services<br/>authelia, stack, arcane, adlists, backup,<br/>maintenance, quarterly, watchdog, heal,<br/>beszelagent, diskguard, fsck"]
+    S2 --> CUT["dnscutover<br/>verifies Pi-hole, then points<br/>the host resolver at it"]
+    CUT --> RT["Router: hand out the Pi as DNS,<br/>remove any secondary resolver"]
+    RT --> MAN["Manual first-run steps<br/>TOTP, claim Beszel, change defaults,<br/>approve subnet route, Transmission UPnP"]
+    S2 -.->|"beszelagent skips until<br/>BESZEL_KEY/TOKEN are set"| MAN
+```
 
 **Do not change the router DNS until stage 2 tells you.** An unprovisioned Pi
 cannot provide DNS during installation. `apt`, image pulls, and the Caddy build
@@ -451,7 +506,7 @@ access only. These choices are wrong for another threat model:
   with endpoint allowlists. `EXEC` is off for both proxies. `POST` is off for
   the read-only proxy. A service that can create a container can mount `/`.
   Set `SOCKET_PROXY_POST=0` to make Arcane read-only. Use your strongest
-  password either way.
+  password either way. See the diagram below the list.
 - **Diun monitors image updates automatically.** Arcane image polling is off
   in persistent settings. This prevents duplicate registry checks. You can run
   the Arcane check manually. The quarterly updater changes digests after backup
@@ -512,6 +567,18 @@ access only. These choices are wrong for another threat model:
 
 This is why the rule in [docs/DECISIONS.md](docs/DECISIONS.md#tls-is-not-authorisation--never-forward-these-ports) has no exceptions.
 
+**Docker socket access.** Each proxy sits on its own `internal` network, so a
+read-only consumer cannot address the read-write proxy:
+
+```mermaid
+flowchart LR
+    ARC["Arcane"] -->|"socketproxy_rw<br/>internal network"| RW["socket-proxy-rw<br/>POST = SOCKET_PROXY_POST<br/>EXEC off"]
+    DOZ["Dozzle"] -->|"socketproxy_ro<br/>internal network"| RO["socket-proxy-ro<br/>POST off, EXEC off"]
+    DIUN["Diun"] -->|"socketproxy_ro"| RO
+    RW --> SOCK[("/var/run/docker.sock")]
+    RO --> SOCK
+```
+
 ---
 
 ## 7. Decisions to understand before you build
@@ -519,6 +586,7 @@ This is why the rule in [docs/DECISIONS.md](docs/DECISIONS.md#tls-is-not-authori
 Read [docs/DECISIONS.md](docs/DECISIONS.md) before you build. It records the
 five expensive-to-reverse choices. Read [docs/OPERATIONS.md](docs/OPERATIONS.md)
 for all other operating detail.
+
 ---
 
 ## 8. Layout
@@ -557,8 +625,13 @@ for all other operating detail.
 │  └─ com.example.pi-backup-pull.plist.tmpl
 ├─ docs/
 │  ├─ OPERATIONS.md             the runbook
+│  ├─ DECISIONS.md              the expensive-to-reverse choices
+│  ├─ services/                 per-service notes: apps, auth, https,
+│  │                            network, observability
 │  └─ images/
 │     └─ homeberry-dashboard.png  README screenshot
+├─ assets/                      logo (SVG + PNG)
+├─ CONTRIBUTING.md  SECURITY.md  CODE_OF_CONDUCT.md  LICENSE
 └─ appdata/                     ALL MUTABLE STATE          (gitignored)
    ├─ pihole/etc/               config, gravity DB, adlists
    ├─ authelia/                 users DB, SQLite TOTP state, notifications
