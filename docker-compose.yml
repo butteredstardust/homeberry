@@ -213,7 +213,7 @@ services:
   # really a direct-play server.
   plex:
     <<: *common
-    image: lscr.io/linuxserver/plex:latest@sha256:8f655bad7dcbc5398a78f70a5af12600b4ed3424f901566ed1eaa6710e9e2334
+    image: lscr.io/linuxserver/plex:latest@sha256:01a53d9c7adcbb3701fbb0a4230c0a37c85453759b6b05a67356c3c7a09de08d
     container_name: plex
     network_mode: host
     environment:
@@ -250,7 +250,7 @@ services:
   # 3552, 8082, 8083, 8085, 8086, 80 and 443 — none of those, ever.
   transmission:
     <<: *common
-    image: lscr.io/linuxserver/transmission:latest@sha256:55aaeedf9fc354d34136387e15ee0ba4679096f20398dd2875867e5cd5cf8be5
+    image: lscr.io/linuxserver/transmission:latest@sha256:5b3c27a96c8a37c878a525ebf377a32032c3a3acfe845ecaa7c3eb10b09c2caa
     container_name: transmission
     ports:
       - "${BIND_ADDR:-127.0.0.1}:9091:9091"   # web UI
@@ -507,7 +507,7 @@ services:
 
   arcane:
     <<: *common
-    image: ghcr.io/getarcaneapp/manager:latest@sha256:e211067a6808c1598175141cd19c48eab874a24b5b649be3ddcb3894db7e73cd
+    image: ghcr.io/getarcaneapp/manager:latest@sha256:3d7057b7e3b3e0be4b3ba34dd1b137b02a055f97ddc232c32817666658643842
     container_name: arcane
     ports:
       - "${BIND_ADDR:-127.0.0.1}:3552:3552"
@@ -565,7 +565,7 @@ services:
     # so pin by digest. NOTE: the image ships only homebridge-config-ui-x —
     # Homebridge itself lives in the /homebridge volume, so the restored
     # package.json governs its version. Upgrade via the UI, deliberately.
-    image: homebridge/homebridge:latest@sha256:d2370beb6a0208d3f20f869288bc070b5cc34d86b52a5872311ce2bcff02a670
+    image: homebridge/homebridge:latest@sha256:0518217e47c66d62a1f618a5a134e7dce50d4ebcc9de2b754ca33d2593d324a1
     container_name: homebridge
     network_mode: host
     environment:
@@ -778,7 +778,7 @@ services:
   # .env alone does nothing. Regenerate users.yml too; the command is in .env.
   dozzle:
     <<: *common
-    image: amir20/dozzle:latest@sha256:8796ae7e1ecbe011482319cb7040e69aae91a0632b87bbe24b3f643e7455d94b
+    image: amir20/dozzle:latest@sha256:d23d23ce02c8cc96416dfbad4a7de225d01fdc03ad310203d64d580034dd120d
     container_name: dozzle
     ports:
       # Break-glass route only, same reasoning as starbase80's 8084 — the normal
@@ -821,7 +821,7 @@ services:
   # single env var, e.g. DIUN_NOTIF_NTFY_ENDPOINT / _TOPIC. See ROADMAP.md.
   diun:
     <<: *common
-    image: crazymax/diun:latest@sha256:e324b793eb32dfb7f74d3a39421ebf090141caaadee69b8f78da63112408ee25
+    image: crazymax/diun:latest@sha256:8cc638b4c54e8a0c47898a51b20dae73037ad43310168b5da543a311dc668f77
     container_name: diun
     networks: [default, socketproxy_ro]
     volumes:
@@ -861,7 +861,7 @@ services:
   # §7.8. The two are updated together by quarterly-update.sh.
   beszel:
     <<: *common
-    image: henrygd/beszel:0.21.0@sha256:6b39a8b64f9b15d00a25e7683e31a93c46161182a54f62713525107064e10599
+    image: henrygd/beszel:0.21.1@sha256:8514a69d9bbbcb74f371a3205561ee231fc0289739cea64e8131f341d695b770
     container_name: beszel
     ports:
       - "${BIND_ADDR:-127.0.0.1}:8086:8090"   # break-glass; normal route is metrics.<domain>
