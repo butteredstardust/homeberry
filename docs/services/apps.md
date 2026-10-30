@@ -86,7 +86,7 @@ audio, then claims timed campaign rewards.
 
 | | |
 |---|---|
-| Image | `rangermix/twitch-drops-miner:latest`, digest-pinned to the v2.3.0 release image |
+| Image | `rangermix/twitch-drops-miner:latest`, digest-pinned to the v2.4.0 release image |
 | HTTPS | `https://drops.${CADDY_DOMAIN}` |
 | Break-glass | `127.0.0.1:8088` → container `:8080`; use an SSH tunnel |
 | State | `appdata/twitch-drops-miner/data/` |
@@ -103,6 +103,23 @@ The data and log mounts survive container recreation and are included in the
 normal appdata backups. The quarterly updater refreshes the image digest only
 after backup, then health-checks the loopback backend and the protected HTTPS
 route before accepting the update.
+
+**Keep the miner at v2.3.1 or later.** v2.3.0 cannot renew the Twitch
+integrity token. The miner then shows *Sign in to Twitch* after a restart, and
+logs `SESSION_DIAGNOSTIC` with `SDK_EXPIRED` or `CATALOG` / `integrity`.
+
+**Use the desktop helper when Twitch rejects the embedded browser.** Authelia
+blocks the helper because the helper sends no cookies. Connect it through the
+loopback port instead:
+
+1. Open the tunnel: `ssh -N -L 8088:127.0.0.1:8088 pi@<LAN_IP>`.
+2. On the `drops.` dashboard, select the option to sign in with a browser on
+   your computer.
+3. Run the helper release that matches the miner version. Give it
+   `http://127.0.0.1:8088/` as the TDM URL.
+4. Sign in to Twitch in the helper browser. Quit that browser instance.
+5. Wait for `TDM accepted the session and verified server renewal`.
+6. Close the tunnel.
 
 ## Dashboard (starbase-80)
 
