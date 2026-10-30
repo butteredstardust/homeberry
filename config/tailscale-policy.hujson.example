@@ -34,7 +34,7 @@
 
 	"hosts": {
 		// The Pi is reachable two ways and BOTH must be listed on every rule, or
-		// the rule is trivially bypassed. See the ⚠ in OPERATIONS.md §7.7.
+		// the rule is trivially bypassed. See docs/services/network.md, "Access control (ACLs)".
 		"pi-ts":  "100.64.0.1",     // tailnet address
 		"pi-lan": "192.0.2.10/32",   // same box, via the subnet route
 		"lan":    "192.0.2.0/24",    // everything else behind the subnet router

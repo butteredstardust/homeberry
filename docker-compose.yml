@@ -246,8 +246,9 @@ services:
   #
   # ⚠ 51413 is the ONE port it could ever make sense to forward, and only on a
   # connection with a real public address. It is not a management interface.
-  # Forwarding it does not weaken the rule in README §7.3, which is about 9091,
-  # 3552, 8082, 8083, 8085, 8086, 80 and 443 — none of those, ever.
+  # Forwarding it does not weaken the rule in docs/DECISIONS.md ("TLS is not
+  # authorisation"). That rule covers 9091, 3552, 8082, 8083, 8085, 8086, 80
+  # and 443 — none of those, ever.
   transmission:
     <<: *common
     image: lscr.io/linuxserver/transmission:latest@sha256:5b3c27a96c8a37c878a525ebf377a32032c3a3acfe845ecaa7c3eb10b09c2caa
@@ -752,7 +753,7 @@ services:
     # controller was off and Docker discarded every mem_limit without warning
     # (`docker inspect` showed Memory=0). Fixed by appending
     # `cgroup_enable=memory cgroup_memory=1` to /boot/firmware/cmdline.txt — see
-    # README §10. Verify at any time with:
+    # docs/OPERATIONS.md §10. Verify at any time with:
     #   grep -w memory /sys/fs/cgroup/cgroup.controllers
     #   docker inspect starbase80 --format '{{.HostConfig.Memory}}'   # 1073741824
     # ⚠ A RESTART DOES NOT APPLY IT — the limit is fixed when the container is
@@ -857,8 +858,9 @@ services:
   #
   # Two parts: this containerised hub stores history and draws charts; the
   # collector is a native systemd service so it can use host smartctl for HDD
-  # history. Its pinned version lives in beszel-agent-version. See OPERATIONS
-  # §7.8. The two are updated together by quarterly-update.sh.
+  # history. Its pinned version lives in beszel-agent-version. See
+  # docs/services/observability.md, "Beszel". quarterly-update.sh updates the
+  # two together.
   beszel:
     <<: *common
     image: henrygd/beszel:0.21.1@sha256:8514a69d9bbbcb74f371a3205561ee231fc0289739cea64e8131f341d695b770

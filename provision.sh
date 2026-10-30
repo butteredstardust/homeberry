@@ -939,10 +939,10 @@ fi
 
 # =============================================================== ADLISTS =====
 # Pi-hole ships with ONE adlist (StevenBlack). Everything documented in
-# OPERATIONS.md §7.6 lived in gravity.db, which is appdata and therefore not in
+# docs/services/network.md ("Pi-hole: blocklists") lived in gravity.db, which is appdata and therefore not in
 # this repository — so without this phase a fresh install silently has a
 # fraction of the documented blocking, including none of the DoH blocking that
-# §7.5 depends on.
+# "What is done instead: remove the bootstrap" depends on.
 if run adlists; then
   say "Importing Pi-hole adlists"
   _adlists="$STACK/config/pihole-adlists.txt"

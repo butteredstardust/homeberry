@@ -11,11 +11,11 @@
 # Importing is additive and idempotent: an address already present keeps its
 # current enabled/disabled state and comment, so a list you disabled by hand
 # stays disabled across re-runs. Nothing here is ever deleted — see the
-# "disabled, not deleted" note in docs/OPERATIONS.md §7.6.
+# "Disabled, not removed" note in docs/services/network.md.
 #
 # ⚠ These overlap heavily by design; that is not waste. Overlap is what makes
 # any single list's outage or bad update non-fatal. Before adding more, read
-# §7.6: the marginal unique-domain count of a tenth list is usually near zero,
+# docs/services/network.md: the marginal unique-domain count of a tenth list is usually near zero,
 # and every list is a source of false positives you will have to debug.
 
 # ---- bulk ads and tracking --------------------------------------------------
@@ -29,7 +29,7 @@ https://small.oisd.nl/	oisd small — low-false-positive baseline
 https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.medium.txt	HaGeZi TIF Medium — malware/phishing/scam
 
 # ---- encrypted-DNS bypass ---------------------------------------------------
-# The long tail behind §7.5. This blocks the IP-literal and hostname rendezvous
+# The long tail behind "remove the bootstrap" in docs/services/network.md. This blocks the IP-literal and hostname rendezvous
 # points for public DoH servers, which is what stops a client bootstrapping DoH
 # before it can ask Pi-hole anything. Disable this one first if a device starts
 # behaving strangely.
