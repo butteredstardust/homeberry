@@ -183,6 +183,11 @@ if ! gzip -t "$ARCHIVE"; then
   exit 1
 fi
 
+# Give the archive to the owner of the backup directory, so the workstation
+# pull (mac/pull-backups.sh) can read it over ssh as that user. The mode stays
+# 0600. That user already administers the stack, so this grants no new access.
+chown -- "$(stat -c %u:%g "$DEST")" "$ARCHIVE"
+
 # Retention is per-tier: a core snapshot must never evict a full one.
 find "$DEST" -name "appdata-${TIER}-*.tar.gz" -type f -printf '%T@ %p\n' \
   | sort -rn | tail -n "+$((KEEP + 1))" | cut -d' ' -f2- | xargs -r rm -f
