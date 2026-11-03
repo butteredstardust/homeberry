@@ -20,6 +20,7 @@ env_get() {
 }
 DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
 DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-/dev/sda1}"
+# shellcheck disable=SC2034  # This block is the same in every script; not each one uses every value.
 DATA_DISK="${DATA_DEV%%[0-9]*}"
 # -----------------------------------------------------------------------------
 
@@ -39,8 +40,10 @@ require_file() {
 }
 require_dir() {
   local path="$RESTORE_DIR/$1"
-  [[ -d "$path" ]] && find "$path" -mindepth 1 -print -quit | grep -q . \
-    || { echo "Missing or empty after restore: $1" >&2; exit 1; }
+  if ! { [[ -d "$path" ]] && find "$path" -mindepth 1 -print -quit | grep -q .; }; then
+    echo "Missing or empty after restore: $1" >&2
+    exit 1
+  fi
 }
 
 require_dir 'appdata/plex/Library/Application Support/Plex Media Server/Plug-in Support/Databases'

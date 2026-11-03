@@ -51,6 +51,7 @@ env_get() {
 }
 DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
 DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-/dev/sda1}"
+# shellcheck disable=SC2034  # This block is the same in every script; not each one uses every value.
 DATA_DISK="${DATA_DEV%%[0-9]*}"
 # -----------------------------------------------------------------------------
 
@@ -74,7 +75,7 @@ for _name in "${_subfolders[@]}"; do
   # Reject anything that could escape $DATA_ROOT. This runs as root and chowns
   # recursively, so a stray `../` in .env would be a very bad afternoon.
   case "$_name" in
-    */*|.|..|/*) echo "Refusing invalid MEDIA_SUBFOLDERS entry: '$_name'" >&2; exit 1 ;;
+    */*|.|..) echo "Refusing invalid MEDIA_SUBFOLDERS entry: '$_name'" >&2; exit 1 ;;
   esac
   mkdir -p -- "$DATA_ROOT/$_name"
   TARGETS+=("$DATA_ROOT/$_name")
@@ -89,14 +90,14 @@ found=0
 for t in "${TARGETS[@]}"; do
   [[ -d "$t" ]] || continue
   n=$(find "$t" -xdev ! -uid 1000 -printf . 2>/dev/null | wc -c)
-  (( n > 0 )) && { printf '    %-40s %s entries\n' "${t#$DATA_ROOT/}" "$n"; found=$((found + n)); }
+  (( n > 0 )) && { printf '    %-40s %s entries\n' "${t#"$DATA_ROOT"/}" "$n"; found=$((found + n)); }
 done
 (( found == 0 )) && echo "    none — ownership is already clean"
 
 say "Normalising"
 for t in "${TARGETS[@]}"; do
   if [[ ! -d "$t" ]]; then
-    printf '    %-40s absent, skipped\n' "${t#$DATA_ROOT/}"
+    printf '    %-40s absent, skipped\n' "${t#"$DATA_ROOT"/}"
     continue
   fi
   chown -R "$OWNER" "$t"
@@ -104,17 +105,17 @@ for t in "${TARGETS[@]}"; do
   # exec bit — the ones that have it inherited it from a blanket 777.
   find "$t" -xdev -type d -exec chmod 2775 {} +
   find "$t" -xdev -type f -exec chmod 0664 {} +
-  printf '    %-40s ok\n' "${t#$DATA_ROOT/}"
+  printf '    %-40s ok\n' "${t#"$DATA_ROOT"/}"
 done
 
 # The mount point itself: group-writable + setgid, not 777.
-chown "$OWNER" $DATA_ROOT
-chmod 2775 $DATA_ROOT
+chown "$OWNER" "$DATA_ROOT"
+chmod 2775 "$DATA_ROOT"
 
 say "Result"
-for t in "${TARGETS[@]}" $DATA_ROOT; do
+for t in "${TARGETS[@]}" "$DATA_ROOT"; do
   [[ -e "$t" ]] && stat -c '    %A %U:%G  %n' "$t"
 done
 
 say "Remaining non-1000 paths on the drive (expected: backup/, lost+found/, transcoder/)"
-find $DATA_ROOT -xdev ! -uid 1000 -printf '    %u:%g %m %p\n' 2>/dev/null | head -20 || true
+find "$DATA_ROOT" -xdev ! -uid 1000 -printf '    %u:%g %m %p\n' 2>/dev/null | head -20 || true

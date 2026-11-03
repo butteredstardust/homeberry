@@ -42,6 +42,7 @@ env_get() {
 }
 DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
 DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-/dev/sda1}"
+# shellcheck disable=SC2034  # This block is the same in every script; not each one uses every value.
 DATA_DISK="${DATA_DEV%%[0-9]*}"
 # -----------------------------------------------------------------------------
 DEST="$DATA_ROOT/backup/appdata"
@@ -64,7 +65,7 @@ flock 9
 
 ARCHIVE="$DEST/appdata-${TIER}-${STAMP}.tar.gz"
 
-mountpoint -q $DATA_ROOT || { echo "HDD not mounted — aborting backup." >&2; exit 1; }
+mountpoint -q "$DATA_ROOT" || { echo "HDD not mounted — aborting backup." >&2; exit 1; }
 mkdir -p "$DEST"
 
 # Refuse to run the drive to 100%. A failed backup is an inconvenience; a full

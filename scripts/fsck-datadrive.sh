@@ -49,6 +49,7 @@ env_get() {
 }
 DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
 DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-/dev/sda1}"
+# shellcheck disable=SC2034  # This block is the same in every script; not each one uses every value.
 DATA_DISK="${DATA_DEV%%[0-9]*}"
 DATA_DRIVE_UUID="$(env_get DATA_DRIVE_UUID)"
 
@@ -141,7 +142,7 @@ sync
 # smbd's children can linger for a second or two after the unit reports stopped,
 # so retry rather than giving up on the first "target is busy".
 umounted=0
-for attempt in 1 2 3 4 5; do
+for _ in 1 2 3 4 5; do
   if umount "$MNT" 2>/dev/null; then umounted=1; break; fi
   sleep 3
 done

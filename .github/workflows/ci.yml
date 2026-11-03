@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Pinned to match local runs: the apt package is older and reports trap-only functions as SC2317.
+      - name: Install ShellCheck
+        env:
+          SHELLCHECK_VERSION: 0.11.0
+          SHELLCHECK_SHA256: 12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.aarch64.tar.xz" \
+            --output /tmp/shellcheck.tar.xz
+          echo "${SHELLCHECK_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum --check
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          sudo install "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
+
+      - name: Check Bash syntax
+        run: bash -n provision.sh scripts/*.sh mac/*.sh
+
+      - name: Run ShellCheck
+        run: shellcheck --exclude=SC1091,SC2012,SC2016,SC2329 provision.sh scripts/*.sh mac/*.sh
+
+      - name: Validate Compose model
+        run: docker compose --env-file .env.example config --quiet
+
+      - name: Build Caddy with the DuckDNS module
+        run: docker compose --env-file .env.example build caddy
+
+      - name: Validate Caddy configuration
+        run: >-
+          docker compose --env-file .env.example run --rm --no-deps caddy
+          caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Check Markdown links
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: --offline --no-progress --root-dir "${{ github.workspace }}" './**/*.md'
+          fail: true
+
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_arm64.tar.gz" \
+            --output /tmp/actionlint.tar.gz
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum --check
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+
+      - name: Validate workflows
+        run: /tmp/actionlint

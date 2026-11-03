@@ -38,9 +38,9 @@ mkdir -p "$DEST"
 # BatchMode: never hang on a passphrase or host-key prompt when launchd runs
 # this with no terminal attached. If the key needs a passphrase, this fails
 # loudly in the log instead of blocking forever.
-SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=15"
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
 
-if ! ssh $SSH_OPTS "$PI" true 2>/dev/null; then
+if ! ssh "${SSH_OPTS[@]}" "$PI" true 2>/dev/null; then
   echo "$(date "+%Y-%m-%dT%H:%M:%S%z") cannot reach $PI over ssh (asleep, off the network, or key needs a passphrase)"
   exit 1
 fi
@@ -52,7 +52,7 @@ echo "$(date "+%Y-%m-%dT%H:%M:%S%z") pulling core snapshots from $PI:$SRC"
 # Plain -a only: macOS ships openrsync, not GNU rsync, so --info=stats1 and
 # friends are not available here. The summary at the end of this script does
 # the reporting instead.
-rsync -a -e "ssh $SSH_OPTS" \
+rsync -a -e "ssh ${SSH_OPTS[*]}" \
       --include='appdata-core-*.tar.gz' --exclude='*' \
       "$PI:$SRC/" "$DEST/"
 find "$DEST" -maxdepth 1 -type f -name 'appdata-core-*.tar.gz' -exec chmod 600 {} +
