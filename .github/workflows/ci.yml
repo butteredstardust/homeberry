@@ -24,10 +24,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # Pinned to match local runs: the apt package is older and reports trap-only functions as SC2317.
       - name: Install ShellCheck
+        env:
+          SHELLCHECK_VERSION: 0.11.0
+          SHELLCHECK_SHA256: 12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes shellcheck
+          curl --fail --silent --show-error --location \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.aarch64.tar.xz" \
+            --output /tmp/shellcheck.tar.xz
+          echo "${SHELLCHECK_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum --check
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          sudo install "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
 
       - name: Check Bash syntax
         run: bash -n provision.sh scripts/*.sh mac/*.sh
