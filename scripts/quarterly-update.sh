@@ -36,6 +36,7 @@ env_get() {
 }
 DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
 DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-/dev/sda1}"
+# shellcheck disable=SC2034  # This block is the same in every script; not each one uses every value.
 DATA_DISK="${DATA_DEV%%[0-9]*}"
 # -----------------------------------------------------------------------------
 COMPOSE="$STACK/docker-compose.yml"

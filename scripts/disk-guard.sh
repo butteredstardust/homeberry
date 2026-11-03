@@ -33,6 +33,7 @@ env_get() {
 }
 DATA_ROOT="$(env_get DATA_ROOT)"; DATA_ROOT="${DATA_ROOT:-/mnt/rpidata}"
 DATA_DEV="$(env_get DATA_DEV)";   DATA_DEV="${DATA_DEV:-/dev/sda1}"
+# shellcheck disable=SC2034  # This block is the same in every script; not each one uses every value.
 DATA_DISK="${DATA_DEV%%[0-9]*}"
 # -----------------------------------------------------------------------------
 
@@ -54,9 +55,9 @@ check_pct() {
   if (( pct >= max )); then
     note "$path is ${pct}% full (threshold ${max}%)."
     case "$path" in
-      $DATA_ROOT)
+      "$DATA_ROOT")
         echo "    Backups abort below ~3.5 GB free. Biggest directories:"
-        du -h -d1 $DATA_ROOT 2>/dev/null | sort -rh | head -5 | sed 's/^/      /'
+        du -h -d1 "$DATA_ROOT" 2>/dev/null | sort -rh | head -5 | sed 's/^/      /'
         ;;
       /)
         echo "    Try: docker image prune -a  /  journalctl --vacuum-size=100M"
@@ -67,8 +68,8 @@ check_pct() {
   fi
 }
 
-if mountpoint -q $DATA_ROOT; then
-  check_pct $DATA_ROOT "$DATA_PCT_MAX"
+if mountpoint -q "$DATA_ROOT"; then
+  check_pct "$DATA_ROOT" "$DATA_PCT_MAX"
 else
   note "$DATA_ROOT is NOT MOUNTED. No backups can run and Plex has no media."
 fi
@@ -83,9 +84,9 @@ elif [[ ! -b $DATA_DISK ]]; then
 else
   # USB-SATA bridges usually need an explicit device type; some pass SMART
   # through natively. Try plain first, then -d sat.
-  smart_out="$(smartctl -H -A $DATA_DISK 2>&1 || true)"
+  smart_out="$(smartctl -H -A "$DATA_DISK" 2>&1 || true)"
   if grep -qi 'unknown usb bridge\|Unsupported\|Please specify device type' <<<"$smart_out"; then
-    smart_out="$(smartctl -H -A -d sat $DATA_DISK 2>&1 || true)"
+    smart_out="$(smartctl -H -A -d sat "$DATA_DISK" 2>&1 || true)"
   fi
 
   if grep -qi 'SMART.*overall-health.*PASSED\|SMART Health Status: OK' <<<"$smart_out"; then

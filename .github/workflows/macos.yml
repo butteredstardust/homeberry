@@ -1,0 +1,37 @@
+name: macOS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mac/**'
+      - '.github/workflows/macos.yml'
+  pull_request:
+    paths:
+      - 'mac/**'
+      - '.github/workflows/macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check Bash syntax
+        run: bash -n mac/pull-backups.sh
+
+      - name: Validate launchd plist
+        run: plutil -lint mac/com.example.pi-backup-pull.plist.tmpl
