@@ -1,0 +1,11 @@
+# Gitleaks false positives. Each line is the fingerprint of one reviewed finding:
+# <commit>:<file>:<rule>:<line>. Add a line only after you confirm the value is not a secret.
+# Docs pass the key as "$(cat tailscale-apikey.txt):". The command holds no secret.
+b340b44d6d8dfb3b405909176eb323e9e4eca9d4:docs/services/network.md:curl-auth-user:412
+b340b44d6d8dfb3b405909176eb323e9e4eca9d4:docs/services/network.md:curl-auth-user:455
+b340b44d6d8dfb3b405909176eb323e9e4eca9d4:docs/services/network.md:curl-auth-user:518
+b340b44d6d8dfb3b405909176eb323e9e4eca9d4:docs/services/network.md:curl-auth-user:525
+a4e329914c9e37f45f8e0789aa8da622a2ecad7b:docs/OPERATIONS.md:curl-auth-user:1239
+a4e329914c9e37f45f8e0789aa8da622a2ecad7b:docs/OPERATIONS.md:curl-auth-user:1286
+a4e329914c9e37f45f8e0789aa8da622a2ecad7b:docs/OPERATIONS.md:curl-auth-user:1346
+a4e329914c9e37f45f8e0789aa8da622a2ecad7b:docs/OPERATIONS.md:curl-auth-user:1353
