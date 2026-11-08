@@ -93,7 +93,7 @@ services:
   # answer from the same IP the router advertises (${LAN_IP}).
   pihole:
     <<: *common
-    image: pihole/pihole:latest@sha256:d34134716fc32038b052a8674c7c6879e0ff21f0e6d8af345166fffa2c27c113
+    image: pihole/pihole:latest@sha256:30f803ad5dd60ff96cc0a63008a2e9271af481c1b0399a182192b2e91152c1f9
     container_name: pihole
     network_mode: host
     environment:
@@ -213,7 +213,7 @@ services:
   # really a direct-play server.
   plex:
     <<: *common
-    image: lscr.io/linuxserver/plex:latest@sha256:01a53d9c7adcbb3701fbb0a4230c0a37c85453759b6b05a67356c3c7a09de08d
+    image: lscr.io/linuxserver/plex:latest@sha256:0c2f1122a4275efeea953a9882359f3809b27279d3c3022392e8e610a2eccc67
     container_name: plex
     network_mode: host
     environment:
@@ -251,7 +251,7 @@ services:
   # and 443 — none of those, ever.
   transmission:
     <<: *common
-    image: lscr.io/linuxserver/transmission:latest@sha256:5b3c27a96c8a37c878a525ebf377a32032c3a3acfe845ecaa7c3eb10b09c2caa
+    image: lscr.io/linuxserver/transmission:latest@sha256:fb8fe625941cf15eb69aba4e5c0a678e035ddb11605fd85af4516a4e641f2687
     container_name: transmission
     ports:
       - "${BIND_ADDR:-127.0.0.1}:9091:9091"   # web UI
@@ -508,7 +508,7 @@ services:
 
   arcane:
     <<: *common
-    image: ghcr.io/getarcaneapp/manager:latest@sha256:3d7057b7e3b3e0be4b3ba34dd1b137b02a055f97ddc232c32817666658643842
+    image: ghcr.io/getarcaneapp/manager:latest@sha256:2e0dc9f5ef03599181a49baf6470055d82e24d9cb15bbc62498ea642c0f882a7
     container_name: arcane
     ports:
       - "${BIND_ADDR:-127.0.0.1}:3552:3552"
@@ -566,7 +566,7 @@ services:
     # so pin by digest. NOTE: the image ships only homebridge-config-ui-x —
     # Homebridge itself lives in the /homebridge volume, so the restored
     # package.json governs its version. Upgrade via the UI, deliberately.
-    image: homebridge/homebridge:latest@sha256:0518217e47c66d62a1f618a5a134e7dce50d4ebcc9de2b754ca33d2593d324a1
+    image: homebridge/homebridge:latest@sha256:169416416bf303bb64bfd6c666f64d93a4f52f54db9a64e8ad553b5dc89fcea4
     container_name: homebridge
     network_mode: host
     environment:
@@ -664,7 +664,7 @@ services:
   # only and exists solely as an SSH-tunnel recovery path.
   twitch-drops-miner:
     <<: *common
-    image: rangermix/twitch-drops-miner:latest@sha256:015ba5da5b11e6032d8419cd961d833e9efa950ecbc1ad97c486c5e8b59bf1b6
+    image: rangermix/twitch-drops-miner:latest@sha256:81c93729ab95135dc50264be49bbbc18d418f3563ff57b4e2e73345707f9346a
     container_name: twitch-drops-miner
     init: true
     stop_grace_period: 30s
@@ -694,7 +694,7 @@ services:
   # service on this box, including which ones exist and roughly what they are.
   starbase80:
     <<: *common
-    image: jordanroher/starbase-80:latest@sha256:249bcbb108afba0f597fa2d0c2a55325376f42c01b757e0fe26848222d4eb969
+    image: jordanroher/starbase-80:latest@sha256:d0a768c712cc8f544e918975994bfc082be0f207a8b92f5ebb535fe018ff3316
     container_name: starbase80
     ports:
       # Host 8084 -> container 4173. nginx inside listens on 4173, not 80, so
@@ -779,7 +779,7 @@ services:
   # .env alone does nothing. Regenerate users.yml too; the command is in .env.
   dozzle:
     <<: *common
-    image: amir20/dozzle:latest@sha256:d23d23ce02c8cc96416dfbad4a7de225d01fdc03ad310203d64d580034dd120d
+    image: amir20/dozzle:latest@sha256:915a5acf91b01bb4d11de1fde7e30d55646211240269e4404c03a6f71c5fc91e
     container_name: dozzle
     ports:
       # Break-glass route only, same reasoning as starbase80's 8084 — the normal
@@ -905,8 +905,8 @@ services:
         # for BOTH the builder and the runtime stage, which must match or
         # xcaddy links the plugin against a different Caddy than the one that
         # runs it. quarterly-update.sh rewrites this line.
-        CADDY_VERSION: 2.11.7
-    image: pi-stack/caddy:2.11.7
+        CADDY_VERSION: 2.11.9
+    image: pi-stack/caddy:2.11.9
     container_name: caddy
     # A fixed address on a dedicated bridge is the identity used by the host
     # firewall below. Caddy keeps the default network for container backends
